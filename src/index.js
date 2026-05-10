@@ -1,28 +1,17 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
 const scraper = require('./scraper');
 
 const app = express();
 const PORT = process.env.PORT || 5678;
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5500',
-  'http://127.0.0.1:5500',
-  // 'https://animevault.netlify.app'  ← add your Netlify URL here
-];
-
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
-    if (/\.netlify\.app$/.test(origin)) return callback(null, true);
-    if (/\.vercel\.app$/.test(origin)) return callback(null, true);
-    if (/\.github\.io$/.test(origin)) return callback(null, true);
-    return callback(null, true); // open — tighten if you need auth
-  }
+    // Open CORS — all origins allowed. Tighten if you add auth.
+    return callback(null, true);
+  },
+  exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
 }));
 
 app.use(express.json());
@@ -31,13 +20,13 @@ app.get('/', (req, res) => {
   res.json({
     title: 'AnimeVault Backend (Allanime)',
     status: 'running',
-    version: '2.0.0',
+    version: '3.0.0',
     endpoints: [
       'GET  /search?query=<query>',
       'GET  /anime/<allanime_id>',
       'GET  /episodes/<allanime_id>?mode=sub|dub',
       'GET  /episode_url?show_id=<id>&ep_no=<num>&quality=best|1080|720|480&mode=sub|dub',
-      'GET  /play?show_id=<id>&ep_no=<num>&quality=best|1080|720|480&mode=sub|dub',
+      'GET  /stream?show_id=<id>&ep_no=<num>&quality=best|1080|720|480&mode=sub|dub  (302 redirect to direct URL)',
       'GET  /qualities?show_id=<id>&ep_no=<num>&mode=sub|dub',
       'GET  /episode_info?show_id=<id>&ep_no=<num>',
       'POST /thumbnails  body: { ids: ["id1", "id2"] }',
@@ -80,6 +69,7 @@ app.get('/episodes/:id', async (req, res) => {
   }
 });
 
+// Returns JSON with the direct video/HLS URL — frontend plays it directly, no proxying
 app.get('/episode_url', async (req, res) => {
   const id      = req.query.show_id;
   const epNo    = req.query.ep_no;
@@ -96,7 +86,8 @@ app.get('/episode_url', async (req, res) => {
   }
 });
 
-app.get('/play', async (req, res) => {
+// 302 redirect to the direct stream URL — alternative for video src= usage
+app.get('/stream', async (req, res) => {
   const id      = req.query.show_id;
   const epNo    = req.query.ep_no;
   const quality = req.query.quality || 'best';
@@ -105,69 +96,17 @@ app.get('/play', async (req, res) => {
   try {
     const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
     if (!url) return res.status(404).json({ error: 'Episode not found or URL not available' });
-
-    const upstreamHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-      'Referer':    'https://allmanga.to',
-      'Origin':     'https://allmanga.to',
-    };
-
-    const range = req.headers['range'];
-    if (range) upstreamHeaders['Range'] = range;
-
-    const videoResp = await axios({
-      method: 'get',
-      url,
-      headers: upstreamHeaders,
-      responseType: 'stream',
-      timeout: 30000,
-      maxRedirects: 5,
-    });
-
-    // Critical: CORS headers on the stream itself so browser allows playback
-    const origin = req.headers['origin'] || '*';
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-
-    res.status(videoResp.status);
-
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
-
-    const passThrough = ['content-length', 'content-range', 'cache-control'];
-    passThrough.forEach(h => {
-      if (videoResp.headers[h]) res.setHeader(h, videoResp.headers[h]);
-    });
-
-    if (req.query.download === '1') {
-      res.setHeader('Content-Disposition', `attachment; filename="anime_ep${epNo}.mp4"`);
-    } else {
-      res.setHeader('Content-Disposition', 'inline');
-    }
-
-    videoResp.data.pipe(res);
-    req.on('close', () => videoResp.data.destroy());
-
+    // Redirect the browser directly to the source — no proxying, no timeouts
+    res.redirect(302, url);
   } catch (e) {
-    if (!res.headersSent) {
-      const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
-      res.status(status).json({ error: e.message });
-    }
+    const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
+    res.status(status).json({ error: e.message });
   }
 });
 
-// Preflight for /play
-app.options('/play', (req, res) => {
-  const origin = req.headers['origin'] || '*';
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
-  res.setHeader('Access-Control-Max-Age', '86400');
-  res.sendStatus(204);
-});
+// REMOVED: /play (streaming proxy) — Vercel serverless has a 10s hard timeout which
+// kills video streams. The frontend now fetches the direct URL via /episode_url and
+// plays it using HLS.js, bypassing the backend entirely for actual video bytes.
 
 app.get('/qualities', async (req, res) => {
   const id   = req.query.show_id;
