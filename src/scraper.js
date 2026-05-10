@@ -79,9 +79,40 @@ function decodeProviderId(hex) {
   return r.replace('/clock', '/clock.json');
 }
 
+async function resolveFast4Speed(wrapperUrl) {
+  // fast4speed URLs redirect to a page containing real MP4/HLS links — follow and extract them
+  try {
+    const resp = await axiosInstance.get(wrapperUrl, {
+      timeout: 5000,
+      maxRedirects: 5,
+      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR }
+    });
+    const body = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+    const links = [];
+    // Try JSON response first
+    if (resp.data?.links) {
+      for (const l of resp.data.links) {
+        if (l.link) links.push({ resolution: l.resolutionStr || 'unknown', url: l.link });
+      }
+    }
+    if (resp.data?.hls?.url) links.push({ resolution: 'hls', url: resp.data.hls.url });
+    if (resp.data?.mp4?.url) links.push({ resolution: resp.data.mp4.resolutionStr || 'mp4', url: resp.data.mp4.url });
+    if (links.length) return links;
+    // Scrape MP4/M3U8 URLs from HTML body
+    const mp4s = [...body.matchAll(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/g)].map(m => m[0]);
+    const m3u8s = [...body.matchAll(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g)].map(m => m[0]);
+    for (const u of m3u8s) links.push({ resolution: 'hls', url: u });
+    for (const u of mp4s) links.push({ resolution: 'mp4', url: u });
+    return links;
+  } catch (e) {
+    console.error('[resolveFast4Speed]', e.message);
+    return [];
+  }
+}
+
 async function getLinks(providerPath) {
-  if (providerPath.includes('tools.fast4speed.rsvp')) return [{ resolution: 'Yt', url: providerPath }];
   const url = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
+  if (providerPath.includes('tools.fast4speed.rsvp')) return resolveFast4Speed(url);
   try {
     const { data } = await axiosInstance.get(url, { timeout: 5000 });
     const links = [];
@@ -102,8 +133,7 @@ async function getLinks(providerPath) {
     if (data.mp4?.url) links.push({ resolution: data.mp4.resolutionStr || 'mp4', url: data.mp4.url });
     return links;
   } catch (e) {
-    console.error('[getLinks]', e.message, url);
-    return [];
+    throw new Error(`getLinks fetch failed: ${e.message}`);
   }
 }
 
@@ -224,18 +254,29 @@ async function _resolveEpisodeUrl(showId, epNo, mode, quality) {
   debug.steps.push(`Source lines: ${sourceLines.length} — [${sourceLines.map(r => r.sourceName).join(', ')}]`);
   if (!sourceLines.length) return { url: null, debug };
 
-  // Sequential provider fetch — stop at first that yields links
-  let allLinks = [];
-  for (const prov of PROVIDERS) {
-    const entry = sourceLines.find(r => r.sourceName === prov.name);
-    if (!entry) continue;
-    const path = decodeProviderId(entry.hex);
-    if (!path) continue;
-    debug.steps.push(`Trying ${prov.name}: ${path.substring(0, 80)}`);
-    const links = prov.filemoon ? await getFilemoonLinks(path) : await getLinks(path);
-    debug.steps.push(`${prov.name}: ${links.length} links — [${links.map(l => l.resolution).join(', ')}]`);
-    if (links.length) { allLinks = links; break; }
-  }
+  // Fetch all providers in parallel with a 6s per-provider deadline
+  // Collect from ALL providers so we can pick the best quality overall
+  const providerResults = await Promise.all(
+    PROVIDERS.map(async prov => {
+      const entry = sourceLines.find(r => r.sourceName === prov.name);
+      if (!entry) return [];
+      const path = decodeProviderId(entry.hex);
+      if (!path) return [];
+      debug.steps.push(`Trying ${prov.name}: ${path.substring(0, 80)}`);
+      try {
+        const links = await Promise.race([
+          prov.filemoon ? getFilemoonLinks(path) : getLinks(path),
+          new Promise(resolve => setTimeout(() => resolve([]), 6000))
+        ]);
+        debug.steps.push(`${prov.name}: ${links.length} links — [${links.map(l => l.resolution).join(', ')}]`);
+        return links;
+      } catch (e) {
+        debug.steps.push(`${prov.name}: ERROR — ${e.message}`);
+        return [];
+      }
+    })
+  );
+  let allLinks = providerResults.flat();
 
   debug.steps.push(`Total links: ${allLinks.length}`);
   if (!allLinks.length) return { url: null, debug };
