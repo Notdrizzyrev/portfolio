@@ -151,44 +151,4 @@ app.post('/thumbnails', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`✅ AnimeVault backend running on port ${PORT}`);
-});nst mode = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
-  try {
-    const qualities = await scraper.getAvailableQualities(id, epNo, mode);
-    res.json({ qualities });
-  } catch (e) {
-    res.status(500).json({ error: e.message, qualities: [] });
-  }
-});
-
-app.get('/episode_info', async (req, res) => {
-  const id   = req.query.show_id;
-  const epNo = req.query.ep_no;
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
-  try {
-    const info = await scraper.getEpisodeInfo(id, epNo);
-    if (!info) return res.status(404).json({ error: 'Episode info not found' });
-    res.json(info);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/thumbnails', async (req, res) => {
-  const ids = req.body?.ids || req.body?.mal_ids;
-  if (!ids || !Array.isArray(ids)) {
-    return res.status(400).json({ error: "Missing 'ids' array in request body" });
-  }
-  const results = {};
-  for (const id of ids) {
-    try {
-      const details = await scraper.getAnimeDetails(id);
-      if (details?.thumbnail_url) results[id] = details.thumbnail_url;
-    } catch { }
-  }
-  res.json(results);
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend running on port ${PORT}`);
 });
