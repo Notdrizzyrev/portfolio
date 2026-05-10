@@ -106,34 +106,50 @@ app.get('/play', async (req, res) => {
     const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
     if (!url) return res.status(404).json({ error: 'Episode not found or URL not available' });
 
-    if (req.query.download === '1') {
-      // For downloads: proxy so we can set Content-Disposition
-      const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-        'Referer': 'https://allmanga.to'
-      };
-      const range = req.headers.range;
-      if (range) headers['Range'] = range;
+    const upstreamHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+      'Referer':    'https://allmanga.to',
+      'Origin':     'https://allmanga.to',
+    };
 
-      const videoResp = await axios.get(url, {
-        headers,
-        responseType: 'stream',
-        timeout: 30000
-      });
-      res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
+    // Forward Range header from browser so video seeking works and
+    // each chunk stays well under Vercel's 4.5 MB response limit
+    const range = req.headers['range'];
+    if (range) upstreamHeaders['Range'] = range;
+
+    const videoResp = await axios({
+      method: 'get',
+      url,
+      headers: upstreamHeaders,
+      responseType: 'stream',
+      timeout: 30000,
+      maxRedirects: 5,
+    });
+
+    // Mirror status (200 or 206 Partial Content)
+    res.status(videoResp.status);
+
+    // Pass through all relevant headers
+    const passThrough = [
+      'content-type', 'content-length', 'content-range',
+      'accept-ranges', 'cache-control', 'expires',
+    ];
+    passThrough.forEach(h => {
+      if (videoResp.headers[h]) res.setHeader(h, videoResp.headers[h]);
+    });
+
+    // Always advertise range support so the browser seeks instead of re-downloading
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    if (req.query.download === '1') {
       res.setHeader('Content-Disposition', `attachment; filename="anime_ep${epNo}.mp4"`);
-      res.setHeader('Accept-Ranges', 'bytes');
-      if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
-      if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
-      res.status(videoResp.status);
-      videoResp.data.pipe(res);
-      res.on('close', () => videoResp.data.destroy());
     } else {
-      // For playback: redirect the browser straight to the source.
-      // This avoids Vercel's response size limits and eliminates proxy-caused buffering.
-      res.setHeader('Cache-Control', 'no-store');
-      res.redirect(307, url);
+      res.setHeader('Content-Disposition', 'inline');
     }
+
+    videoResp.data.pipe(res);
+    req.on('close', () => videoResp.data.destroy());
+
   } catch (e) {
     if (!res.headersSent) {
       const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
