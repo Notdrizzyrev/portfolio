@@ -4,13 +4,14 @@ const crypto = require('crypto');
 const AGENT         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0';
 const ALLANIME_REFR = 'https://allmanga.to';
 const ALLANIME_BASE = 'allanime.day';
-const ALLANIME_API  = `https://api.${ALLANIME_BASE}`;
+const ALLANIME_API  = 'https://api.allanime.to'; // was api.allanime.day — endpoint moved
 const ALLANIME_KEY  = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 const EPISODE_QUERY_HASH = 'd405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec';
 
+// Increased timeouts — Vercel cold starts + AllAnime API calls need more headroom
 const axiosInstance = axios.create({
   headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR },
-  timeout: 5000
+  timeout: 12000   // was 5000, bumped to 12s
 });
 
 function decrypt(blob) {
@@ -39,7 +40,7 @@ async function getFilemoonLinks(providerPath) {
   const allLinks = [];
   const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
   try {
-    const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
+    const response = await axiosInstance.get(fetchUrl, { timeout: 10000 });
     const fmData   = response.data;
     if (fmData?.iv && fmData?.payload && fmData?.key_parts) {
       const keyHex     = b64urlToHex(fmData.key_parts[0]) + b64urlToHex(fmData.key_parts[1]);
@@ -63,7 +64,9 @@ async function getFilemoonLinks(providerPath) {
         else if (m2) allLinks.push({ resolution: m2[1], url: m2[2].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=') });
       }
     }
-  } catch { }
+  } catch (e) {
+    console.error('[getFilemoonLinks] error:', e.message, 'url:', fetchUrl);
+  }
   return allLinks;
 }
 
@@ -91,7 +94,7 @@ async function getLinks(providerPath) {
   }
   const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
   try {
-    const response     = await axiosInstance.get(fetchUrl, { timeout: 4000 });
+    const response     = await axiosInstance.get(fetchUrl, { timeout: 10000 });
     const providerData = response.data;
     if (providerData.links && Array.isArray(providerData.links)) {
       for (const link of providerData.links) {
@@ -99,7 +102,7 @@ async function getLinks(providerPath) {
         const res = link.resolutionStr || 'unknown';
         if (!url) continue;
         if (url.includes('repackager.wixmp.com')) {
-          const cleaned       = url.replace('repackager.wixmp.com/', '').replace(/\.urlset.*/, '');
+          const cleaned        = url.replace('repackager.wixmp.com/', '').replace(/\.urlset.*/, '');
           const qualitiesMatch = url.match(/\/,([^/]*),\/mp4/);
           if (qualitiesMatch) {
             for (const q of qualitiesMatch[1].split(',')) allLinks.push({ resolution: q, url: cleaned.replace(/,[^/]*/, q) });
@@ -107,8 +110,11 @@ async function getLinks(providerPath) {
         } else { allLinks.push({ resolution: res, url }); }
       }
     }
-    if (providerData.hls?.url) allLinks.push({ resolution: 'hls', url: providerData.hls.url });
-  } catch { }
+    if (providerData.hls?.url)  allLinks.push({ resolution: 'hls', url: providerData.hls.url });
+    if (providerData.mp4?.url)  allLinks.push({ resolution: providerData.mp4.resolutionStr || 'mp4', url: providerData.mp4.url });
+  } catch (e) {
+    console.error('[getLinks] error:', e.message, 'url:', fetchUrl);
+  }
   return allLinks;
 }
 
@@ -159,7 +165,10 @@ async function searchAnime(query) {
       episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
       episodes_dub: parseInt(show.availableEpisodes.dub) || 0
     }));
-  } catch { return []; }
+  } catch (e) {
+    console.error('[searchAnime] error:', e.message);
+    return [];
+  }
 }
 
 async function getAnimeDetails(showId) {
@@ -177,7 +186,10 @@ async function getAnimeDetails(showId) {
       episodes_sub: show.availableEpisodesDetail.sub ? show.availableEpisodesDetail.sub.length : 0,
       episodes_dub: show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0
     };
-  } catch { return null; }
+  } catch (e) {
+    console.error('[getAnimeDetails] error:', e.message);
+    return null;
+  }
 }
 
 async function getEpisodesList(showId, mode = 'sub') {
@@ -186,83 +198,135 @@ async function getEpisodesList(showId, mode = 'sub') {
     const response = await axiosInstance.post(`${ALLANIME_API}/api`, { variables: { showId }, query: gql });
     const details  = response.data.data.show.availableEpisodesDetail;
     return (details[mode] || []).sort((a, b) => parseFloat(a) - parseFloat(b));
-  } catch { return []; }
+  } catch (e) {
+    console.error('[getEpisodesList] error:', e.message);
+    return [];
+  }
 }
 
-async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+// Core resolver — returns { url, debug } so both public and debug endpoints work
+async function _resolveEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+  const debug = { showId, epNo, mode, quality, steps: [] };
   const episodeGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
     episode(showId: $showId translationType: $translationType episodeString: $episodeString) { episodeString sourceUrls }
   }`;
-  try {
-    let apiData = null;
-    try {
-      const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-      const queryExt  = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-      const apiUrl    = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-      const getResp   = await axios.get(apiUrl, {
-        headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
-        timeout: 5000
-      });
-      if (JSON.stringify(getResp.data).includes('tobeparsed')) apiData = getResp.data;
-    } catch { }
 
-    if (!apiData) {
+  let apiData = null;
+
+  // Step 1: Try GET with persisted query
+  try {
+    const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: String(epNo) });
+    const queryExt  = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+    const apiUrl    = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+    const getResp   = await axios.get(apiUrl, {
+      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+      timeout: 12000
+    });
+    const hasData = JSON.stringify(getResp.data).includes('tobeparsed') || getResp.data?.data?.episode?.sourceUrls;
+    if (hasData) {
+      apiData = getResp.data;
+      debug.steps.push('GET persisted query: OK');
+    } else {
+      debug.steps.push('GET persisted query: response had no usable data');
+    }
+  } catch (e) {
+    debug.steps.push(`GET persisted query: FAILED (${e.message})`);
+  }
+
+  // Step 2: Fallback POST
+  if (!apiData) {
+    try {
       const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
-        variables: { showId, translationType: mode, episodeString: epNo },
+        variables: { showId, translationType: mode, episodeString: String(epNo) },
         query: episodeGql
       });
       apiData = postResp.data;
+      debug.steps.push('POST fallback: OK');
+    } catch (e) {
+      debug.steps.push(`POST fallback: FAILED (${e.message})`);
+      return { url: null, debug };
     }
+  }
 
-    if (apiData.errors?.length > 0) {
-      if (apiData.errors.find(e => e.message === 'NEED_CAPTCHA')) throw new Error('NEED_CAPTCHA');
-      throw new Error(`AllAnime API error: ${apiData.errors.map(e => e.message).join(', ')}`);
+  if (apiData.errors?.length > 0) {
+    const msg = apiData.errors.map(e => e.message).join(', ');
+    debug.steps.push(`API errors: ${msg}`);
+    if (apiData.errors.find(e => e.message === 'NEED_CAPTCHA')) throw new Error('NEED_CAPTCHA');
+    return { url: null, debug };
+  }
+
+  const respLines = parseSourceLines(apiData);
+  debug.steps.push(`Source lines: ${respLines.length} — [${respLines.map(r => r.sourceName).join(', ')}]`);
+
+  if (!respLines.length) return { url: null, debug };
+
+  // Try all known provider names
+  const providerDefs = [
+    { name: 'Default',  filemoon: false },
+    { name: 'Yt-mp4',  filemoon: false },
+    { name: 'S-mp4',   filemoon: false },
+    { name: 'Luf-Mp4', filemoon: false },
+    { name: 'Fm-mp4',  filemoon: true  },
+    { name: 'Yt',      filemoon: false },
+    { name: 'Cr-Mp4',  filemoon: false },
+    { name: 'Ok',      filemoon: false },
+  ];
+
+  const results = await Promise.all(providerDefs.map(async prov => {
+    const entry = respLines.find(r => r.sourceName === prov.name);
+    if (!entry) return [];
+    const path  = decodeProviderId(entry.hex);
+    if (!path)  return [];
+    debug.steps.push(`Provider ${prov.name} path: ${path.substring(0, 80)}`);
+    const links = prov.filemoon ? await getFilemoonLinks(path) : await getLinks(path);
+    debug.steps.push(`Provider ${prov.name}: ${links.length} links — [${links.map(l=>l.resolution).join(', ')}]`);
+    return links;
+  }));
+
+  let allLinks = results.flat();
+  debug.steps.push(`Total links after all providers: ${allLinks.length}`);
+
+  if (!allLinks.length) return { url: null, debug };
+
+  allLinks.sort((a, b) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
+
+  let selected;
+  if (quality === 'best') {
+    selected = allLinks[0];
+  } else if (quality === 'worst') {
+    const num = allLinks.filter(l => /^\d+/.test(l.resolution));
+    selected  = num.length ? num[num.length - 1] : allLinks[allLinks.length - 1];
+  } else {
+    selected = allLinks.find(l => l.resolution.includes(quality));
+    if (!selected) {
+      const num   = allLinks.filter(l => /^\d+/.test(l.resolution));
+      const req   = parseInt(quality) || 9999;
+      const below = num.filter(l => parseInt(l.resolution) <= req);
+      selected    = below.length ? below[0] : (num.length ? num[num.length - 1] : allLinks[0]);
     }
+  }
 
-    const respLines = parseSourceLines(apiData);
-    if (!respLines.length) return null;
+  const url = selected.url.replace(/([^:])\/{2,}/g, '$1/');
+  debug.steps.push(`Selected: res=${selected.resolution} url=${url.substring(0, 100)}`);
+  return { url, debug };
+}
 
-    const providerDefs = [
-      { name: 'Default',  filemoon: false },
-      { name: 'Yt-mp4',  filemoon: false },
-      { name: 'S-mp4',   filemoon: false },
-      { name: 'Luf-Mp4', filemoon: false },
-      { name: 'Fm-mp4',  filemoon: true  }
-    ];
-
-    const results  = await Promise.all(providerDefs.map(async prov => {
-      const entry = respLines.find(r => r.sourceName === prov.name);
-      if (!entry) return [];
-      const path  = decodeProviderId(entry.hex);
-      if (!path)  return [];
-      return prov.filemoon ? getFilemoonLinks(path) : getLinks(path);
-    }));
-
-    let allLinks = results.flat();
-    if (!allLinks.length) return null;
-
-    allLinks.sort((a, b) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
-
-    let selected;
-    if (quality === 'best') {
-      selected = allLinks[0];
-    } else if (quality === 'worst') {
-      const num = allLinks.filter(l => /^\d+/.test(l.resolution));
-      selected  = num.length ? num[num.length - 1] : allLinks[allLinks.length - 1];
-    } else {
-      selected = allLinks.find(l => l.resolution.includes(quality));
-      if (!selected) {
-        const num     = allLinks.filter(l => /^\d+/.test(l.resolution));
-        const req     = parseInt(quality) || 9999;
-        const below   = num.filter(l => parseInt(l.resolution) <= req);
-        selected      = below.length ? below[0] : (num.length ? num[num.length - 1] : allLinks[0]);
-      }
-    }
-
-    return selected.url.replace(/([^:])\/{2,}/g, '$1/');
+async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+  try {
+    const { url } = await _resolveEpisodeUrl(showId, epNo, mode, quality);
+    return url;
   } catch (e) {
     if (e.message?.startsWith('NEED_CAPTCHA')) throw e;
+    console.error('[getEpisodeUrl] fatal:', e.message);
     return null;
+  }
+}
+
+async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best') {
+  try {
+    return await _resolveEpisodeUrl(showId, epNo, mode, quality);
+  } catch (e) {
+    return { url: null, debug: { error: e.message } };
   }
 }
 
@@ -281,48 +345,23 @@ async function getEpisodeInfo(showId, epNo) {
       episode_no: info.episodeIdNum, title: info.notes || '', description: info.description || '',
       thumbnails: (info.thumbnails || []).map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t)
     };
-  } catch { return null; }
+  } catch (e) {
+    console.error('[getEpisodeInfo] error:', e.message);
+    return null;
+  }
 }
 
 async function getAvailableQualities(showId, epNo, mode = 'sub') {
   try {
-    let apiData = null;
-    try {
-      const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-      const queryExt  = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-      const apiUrl    = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-      const getResp   = await axios.get(apiUrl, {
-        headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
-        timeout: 5000
-      });
-      if (JSON.stringify(getResp.data).includes('tobeparsed')) apiData = getResp.data;
-    } catch { }
-    if (!apiData) {
-      const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
-        variables: { showId, translationType: mode, episodeString: epNo },
-        query: `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-          episode(showId: $showId translationType: $translationType episodeString: $episodeString) { episodeString sourceUrls }
-        }`
-      });
-      apiData = postResp.data;
-    }
-    if (apiData.errors?.length) return [];
-    const respLines = parseSourceLines(apiData);
-    if (!respLines.length) return [];
-    const providerDefs = [
-      { name: 'Default', filemoon: false }, { name: 'Yt-mp4', filemoon: false },
-      { name: 'S-mp4',   filemoon: false }, { name: 'Luf-Mp4', filemoon: false },
-      { name: 'Fm-mp4',  filemoon: true  }
-    ];
-    const results  = await Promise.all(providerDefs.map(async prov => {
-      const entry = respLines.find(r => r.sourceName === prov.name);
-      if (!entry) return [];
-      const path  = decodeProviderId(entry.hex);
-      if (!path)  return [];
-      return prov.filemoon ? getFilemoonLinks(path) : getLinks(path);
-    }));
-    return [...new Set(results.flat().map(l => l.resolution))];
+    const { debug } = await _resolveEpisodeUrl(showId, epNo, mode, 'best');
+    // Extract resolution labels from debug steps
+    const resSet = new Set();
+    debug.steps.forEach(s => {
+      const m = s.match(/\[([^\]]+)\]/);
+      if (m) m[1].split(', ').forEach(r => { if (/^\d+$/.test(r)) resSet.add(r); });
+    });
+    return [...resSet];
   } catch { return []; }
 }
 
-module.exports = { searchAnime, getAnimeDetails, getEpisodesList, getEpisodeUrl, getEpisodeInfo, getAvailableQualities };
+module.exports = { searchAnime, getAnimeDetails, getEpisodesList, getEpisodeUrl, getEpisodeUrlDebug, getEpisodeInfo, getAvailableQualities };
