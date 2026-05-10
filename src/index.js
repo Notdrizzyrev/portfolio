@@ -112,8 +112,6 @@ app.get('/play', async (req, res) => {
       'Origin':     'https://allmanga.to',
     };
 
-    // Forward Range header from browser so video seeking works and
-    // each chunk stays well under Vercel's 4.5 MB response limit
     const range = req.headers['range'];
     if (range) upstreamHeaders['Range'] = range;
 
@@ -126,20 +124,23 @@ app.get('/play', async (req, res) => {
       maxRedirects: 5,
     });
 
-    // Mirror status (200 or 206 Partial Content)
+    // Critical: CORS headers on the stream itself so browser allows playback
+    const origin = req.headers['origin'] || '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
     res.status(videoResp.status);
 
-    // Pass through all relevant headers
-    const passThrough = [
-      'content-type', 'content-length', 'content-range',
-      'accept-ranges', 'cache-control', 'expires',
-    ];
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
+
+    const passThrough = ['content-length', 'content-range', 'cache-control'];
     passThrough.forEach(h => {
       if (videoResp.headers[h]) res.setHeader(h, videoResp.headers[h]);
     });
-
-    // Always advertise range support so the browser seeks instead of re-downloading
-    res.setHeader('Accept-Ranges', 'bytes');
 
     if (req.query.download === '1') {
       res.setHeader('Content-Disposition', `attachment; filename="anime_ep${epNo}.mp4"`);
@@ -156,6 +157,16 @@ app.get('/play', async (req, res) => {
       res.status(status).json({ error: e.message });
     }
   }
+});
+
+// Preflight for /play
+app.options('/play', (req, res) => {
+  const origin = req.headers['origin'] || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.sendStatus(204);
 });
 
 app.get('/qualities', async (req, res) => {
