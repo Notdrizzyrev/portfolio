@@ -82,22 +82,7 @@ app.get('/episode_url', async (req, res) => {
     res.json({ episode_url: url, mode, quality });
   } catch (e) {
     const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
-    res.status(status).json({ error: e.message, stack: e.stack });
-  }
-});
-
-// Debug endpoint — returns full resolution trace so we can see exactly where it fails
-app.get('/debug_episode', async (req, res) => {
-  const id      = req.query.show_id;
-  const epNo    = req.query.ep_no;
-  const quality = req.query.quality || 'best';
-  const mode    = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
-  try {
-    const result = await scraper.getEpisodeUrlDebug(id, epNo, mode, quality);
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
+    res.status(status).json({ error: e.message });
   }
 });
 
