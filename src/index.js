@@ -19,7 +19,9 @@ app.use(cors({
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
     if (/\.netlify\.app$/.test(origin)) return callback(null, true);
-    return callback(new Error('CORS not allowed for: ' + origin));
+    if (/\.vercel\.app$/.test(origin)) return callback(null, true);
+    if (/\.github\.io$/.test(origin)) return callback(null, true);
+    return callback(null, true); // open — tighten if you need auth
   }
 }));
 
@@ -104,34 +106,34 @@ app.get('/play', async (req, res) => {
     const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
     if (!url) return res.status(404).json({ error: 'Episode not found or URL not available' });
 
-    const range = req.headers.range;
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-      'Referer': 'https://allmanga.to'
-    };
-    if (range) headers['Range'] = range;
-
-    const videoResp = await axios.get(url, {
-      headers,
-      responseType: 'stream',
-      timeout: 20000
-    });
-
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
     if (req.query.download === '1') {
+      // For downloads: proxy so we can set Content-Disposition
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+        'Referer': 'https://allmanga.to'
+      };
+      const range = req.headers.range;
+      if (range) headers['Range'] = range;
+
+      const videoResp = await axios.get(url, {
+        headers,
+        responseType: 'stream',
+        timeout: 30000
+      });
+      res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
       res.setHeader('Content-Disposition', `attachment; filename="anime_ep${epNo}.mp4"`);
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
+      if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
+      res.status(videoResp.status);
+      videoResp.data.pipe(res);
+      res.on('close', () => videoResp.data.destroy());
     } else {
-      res.setHeader('Content-Disposition', 'inline');
+      // For playback: redirect the browser straight to the source.
+      // This avoids Vercel's response size limits and eliminates proxy-caused buffering.
+      res.setHeader('Cache-Control', 'no-store');
+      res.redirect(307, url);
     }
-    if (videoResp.headers['content-length'])  res.setHeader('Content-Length',  videoResp.headers['content-length']);
-    if (videoResp.headers['content-range'])   res.setHeader('Content-Range',   videoResp.headers['content-range']);
-    if (videoResp.headers['accept-ranges'])   res.setHeader('Accept-Ranges',   videoResp.headers['accept-ranges']);
-
-    res.status(videoResp.status);
-    videoResp.data.pipe(res);
-    res.on('close', () => videoResp.data.destroy());
-
   } catch (e) {
     if (!res.headersSent) {
       const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
