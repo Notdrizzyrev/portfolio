@@ -125,4 +125,16 @@ app.post('/thumbnails', async (req, res) => {
   res.json(results);
 });
 
+// Batch dub check endpoint — frontend calls this with mal_id list to get allanime dub counts
+app.get('/dub-check', async (req, res) => {
+  const query = req.query.query || '';
+  if (!query) return res.status(400).json({ error: 'Missing query' });
+  try {
+    const results = await scraper.searchAnime(query);
+    // Return the best match's dub count
+    res.json(results);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
 app.listen(PORT, () => console.log(`✅ AnimeVault backend running on port ${PORT}`));
