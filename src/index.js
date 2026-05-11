@@ -1,169 +1,155 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const cors    = require('cors');
+const axios   = require('axios');
 const scraper = require('./scraper');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 5678;
 
+// Open CORS for all origins
 app.use(cors({
-  origin: function (origin, callback) {
-    // Open CORS — all origins allowed. Tighten if you add auth.
-    return callback(null, true);
-  },
+  origin: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
 }));
 
 app.use(express.json());
 
+// Root
 app.get('/', (req, res) => {
-  res.json({
-    title: 'AnimeVault Backend (Allanime)',
-    status: 'running',
-    version: '3.0.0',
-    endpoints: [
-      'GET  /search?query=<query>',
-      'GET  /anime/<allanime_id>',
-      'GET  /episodes/<allanime_id>?mode=sub|dub',
-      'GET  /episode_url?show_id=<id>&ep_no=<num>&quality=best|1080|720|480&mode=sub|dub',
-      'GET  /stream?show_id=<id>&ep_no=<num>&quality=best|1080|720|480&mode=sub|dub  (302 redirect to direct URL)',
-      'GET  /qualities?show_id=<id>&ep_no=<num>&mode=sub|dub',
-      'GET  /episode_info?show_id=<id>&ep_no=<num>',
-      'POST /thumbnails  body: { ids: ["id1", "id2"] }',
-    ]
-  });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '4.0.0' });
 });
 
+// Search
 app.get('/search', async (req, res) => {
   const query = (req.query.query || '').trim();
-  if (!query) return res.status(400).json({ error: 'Missing query parameter' });
+  if (!query) return res.status(400).json({ error: 'Missing query' });
   try {
-    const results = await scraper.searchAnime(query);
-    res.json(results);
+    res.json(await scraper.searchAnime(query));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// Anime details
 app.get('/anime/:id', async (req, res) => {
-  const id = req.params.id;
-  if (!id) return res.status(400).json({ error: 'Missing ID' });
   try {
-    const details = await scraper.getAnimeDetails(id);
-    if (!details) return res.status(404).json({ error: 'Anime not found on Allanime' });
+    const details = await scraper.getAnimeDetails(req.params.id);
+    if (!details) return res.status(404).json({ error: 'Not found' });
     res.json(details);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// Episode list
 app.get('/episodes/:id', async (req, res) => {
-  const id = req.params.id;
   const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id) return res.status(400).json({ error: 'Missing ID' });
   try {
-    const episodes = await scraper.getEpisodesList(id, mode);
-    res.json({ mode, episodes });
+    res.json({ mode, episodes: await scraper.getEpisodesList(req.params.id, mode) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Returns JSON with the direct video/HLS URL — frontend plays it directly, no proxying
+// Get direct video URL as JSON (for frontend to know what URL it is)
 app.get('/episode_url', async (req, res) => {
-  const id      = req.query.show_id;
-  const epNo    = req.query.ep_no;
-  const quality = req.query.quality || 'best';
-  const mode    = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+  const { show_id, ep_no, quality = 'best', mode: rawMode } = req.query;
+  const mode = rawMode === 'dub' ? 'dub' : 'sub';
+  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
-    if (!url) return res.status(404).json({ error: 'Episode not found or URL not available' });
+    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
+    if (!url) return res.status(404).json({ error: 'Not found' });
     res.json({ episode_url: url, mode, quality });
   } catch (e) {
-    const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
-    res.status(status).json({ error: e.message, stack: e.stack });
+    res.status(e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500).json({ error: e.message });
   }
 });
 
-// Debug endpoint — returns full resolution trace so we can see exactly where it fails
-app.get('/debug_episode', async (req, res) => {
-  const id      = req.query.show_id;
-  const epNo    = req.query.ep_no;
-  const quality = req.query.quality || 'best';
-  const mode    = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+// PLAY - proxy the video stream with correct headers so CDN doesn't block it
+app.get('/play', async (req, res) => {
+  const { show_id, ep_no, quality = 'best', mode: rawMode, download } = req.query;
+  const mode = rawMode === 'dub' ? 'dub' : 'sub';
+  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const result = await scraper.getEpisodeUrlDebug(id, epNo, mode, quality);
-    res.json(result);
+    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
+    if (!url) return res.status(404).json({ error: 'Not found' });
+
+    const upstream = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+      'Referer':    'https://allmanga.to',
+      'Origin':     'https://allmanga.to',
+      'Accept':     '*/*',
+    };
+    if (req.headers['range']) upstream['Range'] = req.headers['range'];
+
+    const resp = await axios({ method: 'get', url, headers: upstream, responseType: 'stream', timeout: 30000, maxRedirects: 5 });
+
+    // CORS headers so browser allows cross-origin video playback
+    res.setHeader('Access-Control-Allow-Origin',   req.headers['origin'] || '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+    res.setHeader('Cross-Origin-Resource-Policy',  'cross-origin');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', resp.headers['content-type'] || 'video/mp4');
+    if (resp.headers['content-length']) res.setHeader('Content-Length', resp.headers['content-length']);
+    if (resp.headers['content-range'])  res.setHeader('Content-Range',  resp.headers['content-range']);
+    res.setHeader('Content-Disposition', download === '1' ? `attachment; filename="ep${ep_no}.mp4"` : 'inline');
+
+    res.status(resp.status);
+    resp.data.pipe(res);
+    req.on('close', () => resp.data.destroy());
+
   } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
 
-// 302 redirect to the direct stream URL — alternative for video src= usage
-app.get('/stream', async (req, res) => {
-  const id      = req.query.show_id;
-  const epNo    = req.query.ep_no;
-  const quality = req.query.quality || 'best';
-  const mode    = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
-  try {
-    const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
-    if (!url) return res.status(404).json({ error: 'Episode not found or URL not available' });
-    // Redirect the browser directly to the source — no proxying, no timeouts
-    res.redirect(302, url);
-  } catch (e) {
-    const status = e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500;
-    res.status(status).json({ error: e.message });
-  }
+// OPTIONS preflight for /play
+app.options('/play', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin',  req.headers['origin'] || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Max-Age',       '86400');
+  res.sendStatus(204);
 });
 
-// REMOVED: /play (streaming proxy) — Vercel serverless has a 10s hard timeout which
-// kills video streams. The frontend now fetches the direct URL via /episode_url and
-// plays it using HLS.js, bypassing the backend entirely for actual video bytes.
-
+// Qualities
 app.get('/qualities', async (req, res) => {
-  const id   = req.query.show_id;
-  const epNo = req.query.ep_no;
-  const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+  const { show_id, ep_no, mode: rawMode } = req.query;
+  const mode = rawMode === 'dub' ? 'dub' : 'sub';
+  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const qualities = await scraper.getAvailableQualities(id, epNo, mode);
-    res.json({ qualities });
+    res.json({ qualities: await scraper.getAvailableQualities(show_id, ep_no, mode) });
   } catch (e) {
     res.status(500).json({ error: e.message, qualities: [] });
   }
 });
 
+// Episode info
 app.get('/episode_info', async (req, res) => {
-  const id   = req.query.show_id;
-  const epNo = req.query.ep_no;
-  if (!id || !epNo) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+  const { show_id, ep_no } = req.query;
+  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const info = await scraper.getEpisodeInfo(id, epNo);
-    if (!info) return res.status(404).json({ error: 'Episode info not found' });
+    const info = await scraper.getEpisodeInfo(show_id, ep_no);
+    if (!info) return res.status(404).json({ error: 'Not found' });
     res.json(info);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// Thumbnails
 app.post('/thumbnails', async (req, res) => {
   const ids = req.body?.ids || req.body?.mal_ids;
-  if (!ids || !Array.isArray(ids)) {
-    return res.status(400).json({ error: "Missing 'ids' array in request body" });
-  }
+  if (!ids || !Array.isArray(ids)) return res.status(400).json({ error: "Missing 'ids' array" });
   const results = {};
   for (const id of ids) {
     try {
-      const details = await scraper.getAnimeDetails(id);
-      if (details?.thumbnail_url) results[id] = details.thumbnail_url;
-    } catch { }
+      const d = await scraper.getAnimeDetails(id);
+      if (d?.thumbnail_url) results[id] = d.thumbnail_url;
+    } catch {}
   }
   res.json(results);
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`AnimeVault backend running on port ${PORT}`));
