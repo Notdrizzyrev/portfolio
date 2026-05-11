@@ -7,20 +7,20 @@ const scraper = require('./scraper');
 const app  = express();
 const PORT = process.env.PORT || 5678;
 
+// Open CORS for all origins + expose video headers
 app.use(cors({
   origin: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
 }));
-
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '4.0.0' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.0.0' });
 });
 
 app.get('/search', async (req, res) => {
-  const query = (req.query.query || '').trim();
-  if (!query) return res.status(400).json({ error: 'Missing query' });
+  const query = req.query.query || '';
+  if (!query) return res.status(400).json({ error: 'Missing query parameter' });
   try { res.json(await scraper.searchAnime(query)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -28,7 +28,7 @@ app.get('/search', async (req, res) => {
 app.get('/anime/:id', async (req, res) => {
   try {
     const details = await scraper.getAnimeDetails(req.params.id);
-    if (!details) return res.status(404).json({ error: 'Not found' });
+    if (!details) return res.status(404).json({ error: 'Anime not found' });
     res.json(details);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -60,27 +60,28 @@ app.get('/play', async (req, res) => {
     const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
     if (!url) return res.status(404).json({ error: 'Not found' });
 
-    const upstream = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-      'Referer':    'https://allmanga.to',
-      'Origin':     'https://allmanga.to',
-      'Accept':     '*/*',
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+      'Referer': 'https://allmanga.to',
+      'Origin': 'https://allmanga.to',
     };
-    if (req.headers['range']) upstream['Range'] = req.headers['range'];
+    if (req.headers['range']) headers['Range'] = req.headers['range'];
 
-    const resp = await axios({ method: 'get', url, headers: upstream, responseType: 'stream', timeout: 30000, maxRedirects: 5 });
+    const videoResp = await axios.get(url, { headers, responseType: 'stream', timeout: 20000, maxRedirects: 5 });
 
-    res.setHeader('Access-Control-Allow-Origin',   req.headers['origin'] || '*');
+    // CORS headers so browser allows cross-origin video
+    res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-    res.setHeader('Cross-Origin-Resource-Policy',  'cross-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', resp.headers['content-type'] || 'video/mp4');
-    if (resp.headers['content-length']) res.setHeader('Content-Length', resp.headers['content-length']);
-    if (resp.headers['content-range'])  res.setHeader('Content-Range',  resp.headers['content-range']);
     res.setHeader('Content-Disposition', download === '1' ? `attachment; filename="ep${ep_no}.mp4"` : 'inline');
-    res.status(resp.status);
-    resp.data.pipe(res);
-    req.on('close', () => resp.data.destroy());
+    if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
+    if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
+
+    res.status(videoResp.status);
+    videoResp.data.pipe(res);
+    res.on('close', () => videoResp.data.destroy());
 
   } catch (e) {
     if (!res.headersSent) res.status(500).json({ error: e.message });
@@ -91,7 +92,7 @@ app.options('/play', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  req.headers['origin'] || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
-  res.setHeader('Access-Control-Max-Age',       '86400');
+  res.setHeader('Access-Control-Max-Age', '86400');
   res.sendStatus(204);
 });
 
