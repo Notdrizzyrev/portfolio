@@ -112,7 +112,12 @@ async function resolveFast4Speed(wrapperUrl) {
 
 async function getLinks(providerPath) {
   const url = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
-  if (providerPath.includes('tools.fast4speed.rsvp')) return resolveFast4Speed(url);
+
+  // fast4speed requires a separate resolver — use it instead of throwing
+  if (providerPath.includes('fast4speed')) {
+    return await resolveFast4Speed(url);
+  }
+
   try {
     const { data } = await axiosInstance.get(url, { timeout: 5000 });
     const links = [];
@@ -131,6 +136,7 @@ async function getLinks(providerPath) {
     }
     if (data.hls?.url) links.push({ resolution: 'hls', url: data.hls.url });
     if (data.mp4?.url) links.push({ resolution: data.mp4.resolutionStr || 'mp4', url: data.mp4.url });
+    if (!links.length) throw new Error('getLinks: empty response: ' + JSON.stringify(data).substring(0, 200));
     return links;
   } catch (e) {
     throw new Error(`getLinks fetch failed: ${e.message}`);
@@ -194,14 +200,16 @@ function parseSourceLines(apiData) {
 
 // Tried sequentially — stops at first provider that yields links (avoids parallel timeout)
 const PROVIDERS = [
-  { name: 'Default',  filemoon: false },
-  { name: 'Luf-Mp4', filemoon: false },
-  { name: 'S-mp4',   filemoon: false },
-  { name: 'Yt-mp4',  filemoon: false },
-  { name: 'Cr-Mp4',  filemoon: false },
-  { name: 'Fm-mp4',  filemoon: true  },
-  { name: 'Yt',      filemoon: false },
-  { name: 'Ok',      filemoon: false },
+  { name: 'Default',    filemoon: false },
+  { name: 'Luf-Mp4',   filemoon: false },
+  { name: 'S-mp4',     filemoon: false },
+  { name: 'Yt-mp4',    filemoon: false },
+  { name: 'Cr-Mp4',    filemoon: false },
+  { name: 'Fm-mp4',    filemoon: true  },
+  { name: 'Yt',        filemoon: false },
+  { name: 'Ok',        filemoon: false },
+  { name: 'Fast4Speed', filemoon: false },
+  { name: 'fast4speed', filemoon: false },
 ];
 
 async function _resolveEpisodeUrl(showId, epNo, mode, quality) {
@@ -266,7 +274,7 @@ async function _resolveEpisodeUrl(showId, epNo, mode, quality) {
       try {
         const links = await Promise.race([
           prov.filemoon ? getFilemoonLinks(path) : getLinks(path),
-          new Promise(resolve => setTimeout(() => resolve([]), 6000))
+          new Promise(resolve => setTimeout(() => resolve([]), 10000))
         ]);
         debug.steps.push(`${prov.name}: ${links.length} links — [${links.map(l => l.resolution).join(', ')}]`);
         return links;
