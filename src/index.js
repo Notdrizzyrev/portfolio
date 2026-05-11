@@ -7,7 +7,6 @@ const scraper = require('./scraper');
 const app  = express();
 const PORT = process.env.PORT || 5678;
 
-// Open CORS for all origins + expose video headers
 app.use(cors({
   origin: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
@@ -69,7 +68,6 @@ app.get('/play', async (req, res) => {
 
     const videoResp = await axios.get(url, { headers, responseType: 'stream', timeout: 20000, maxRedirects: 5 });
 
-    // CORS headers so browser allows cross-origin video
     res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -127,4 +125,4 @@ app.post('/thumbnails', async (req, res) => {
   res.json(results);
 });
 
-app.listen(PORT, () => console.log(`AnimeVault backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ AnimeVault backend running on port ${PORT}`));
