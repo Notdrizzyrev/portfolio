@@ -15,7 +15,7 @@ const axiosInstance = axios.create({
         'User-Agent': AGENT,
         'Referer': ALLANIME_REFR
     },
-    timeout: 8000
+    timeout: 5000
 });
 
 function decrypt(blob) {
@@ -54,7 +54,7 @@ async function getFilemoonLinks(providerPath) {
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
-        const response = await axiosInstance.get(fetchUrl, { timeout: 6000 });
+        const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
         const fmData = response.data;
 
         if (fmData && fmData.iv && fmData.payload && fmData.key_parts) {
@@ -135,7 +135,7 @@ async function getLinks(providerPath) {
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
-        const response = await axiosInstance.get(fetchUrl, { timeout: 6000 });
+        const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
         const providerData = response.data;
 
         if (providerData.links && Array.isArray(providerData.links)) {
@@ -172,7 +172,7 @@ async function getLinks(providerPath) {
     return allLinks;
 }
 
-async function searchAnime(query, allowAdult = false) {
+async function searchAnime(query, nsfw = false) {
     const searchGql = `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
         shows( search: $search limit: $limit page: $page countryOrigin: $countryOrigin ) {
             edges {
@@ -190,7 +190,7 @@ async function searchAnime(query, allowAdult = false) {
         const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
             variables: {
                 search: {
-                    allowAdult: allowAdult,
+                    allowAdult: nsfw ? true : false,
                     allowUnknown: false,
                     query: query
                 },
@@ -236,18 +236,15 @@ async function getAnimeDetails(showId) {
         const show = response.data.data.show;
         if (!show) return null;
 
-        const epsDub = show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0;
         return {
             id: show._id,
-            name: show.name,
             title: show.englishName || show.name,
             title_english: show.englishName || show.name,
-            thumbnail_url: show.thumbnail ? (show.thumbnail.startsWith('http') ? show.thumbnail : `https://${ALLANIME_BASE}${show.thumbnail}`) : null,
+            thumbnail_url: show.thumbnail,
             synopsis: show.description ? show.description.replace(/<[^>]*>?/gm, '') : '',
             status: show.status,
             episodes_sub: show.availableEpisodesDetail.sub ? show.availableEpisodesDetail.sub.length : 0,
-            episodes_dub: epsDub,
-            has_dub: epsDub > 0
+            episodes_dub: show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0
         };
     } catch (e) {
         return null;
@@ -350,7 +347,7 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
                     'Referer': ALLANIME_REFR,
                     'Origin': 'https://youtu-chan.com'
                 },
-                timeout: 8000
+                timeout: 5000
             });
 
             const rawText = JSON.stringify(getResp.data);
@@ -511,7 +508,7 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
 
             const getResp = await axios.get(apiUrl, {
                 headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
-                timeout: 8000
+                timeout: 5000
             });
             const rawText = JSON.stringify(getResp.data);
             if (rawText && rawText.includes('tobeparsed')) apiData = getResp.data;
