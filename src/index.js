@@ -14,7 +14,25 @@ app.use(cors({
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.1.0' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.2.0' });
+});
+
+// ── JIKAN PROXY ───────────────────────────────────────────────────────────────
+app.get('/jikan/*', async (req, res) => {
+  const path = req.params[0];
+  const query = req.url.split('?')[1] || '';
+  const url = `https://api.jikan.moe/v4/${path}${query ? '?' + query : ''}`;
+  try {
+    const r = await axios.get(url, {
+      headers: { 'Accept': 'application/json' },
+      timeout: 10000
+    });
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json(r.data);
+  } catch (e) {
+    const status = e.response?.status || 500;
+    res.status(status).json({ error: e.message });
+  }
 });
 
 // ── SEARCH ────────────────────────────────────────────────────────────────────
@@ -43,8 +61,6 @@ app.get('/episodes/:id', async (req, res) => {
 });
 
 // ── DUB CHECK ─────────────────────────────────────────────────────────────────
-// Returns { has_dub: bool, episodes_dub: number }
-// Frontend calls: /dub-check?show_id=<allanime_id>
 app.get('/dub-check', async (req, res) => {
   const { show_id } = req.query;
   if (!show_id) return res.status(400).json({ error: 'Missing show_id' });
