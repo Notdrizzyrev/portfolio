@@ -2,8 +2,8 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
-const ALLANIME_REFR = "https://allmanga.to";
-const ALLANIME_BASE = "allanime.day";
+const ALLANIME_REFR = "https://allanime.to";
+const ALLANIME_BASE = "allanime.to";
 const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
 const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 
@@ -83,7 +83,7 @@ async function getFilemoonLinks(providerPath) {
       }
     }
   } catch (e) {
-    // Filemoon fetch failed
+    console.error('[getFilemoonLinks] Error:', e.message);
   }
 
   return allLinks;
@@ -148,7 +148,7 @@ async function getLinks(providerPath) {
       allLinks.push({ resolution: 'hls', url: providerData.hls.url });
     }
   } catch (e) {
-    // Provider fetch failed
+    console.error('[getLinks] Provider fetch failed:', e.message);
   }
 
   return allLinks;
@@ -182,6 +182,7 @@ async function searchAnime(query, allowAdult = false) {
       episodes_dub: parseInt(show.availableEpisodes.dub) || 0
     }));
   } catch (e) {
+    console.error('[searchAnime] Error:', e.message);
     return [];
   }
 }
@@ -216,6 +217,7 @@ async function getAnimeDetails(showId) {
       has_dub: epsDub > 0
     };
   } catch (e) {
+    console.error('[getAnimeDetails] Error:', e.message);
     return null;
   }
 }
@@ -235,6 +237,7 @@ async function getEpisodesList(showId, mode = 'sub') {
     const episodes = details[mode] || [];
     return episodes.sort((a, b) => parseFloat(a) - parseFloat(b));
   } catch (e) {
+    console.error('[getEpisodesList] Error:', e.message);
     return [];
   }
 }
@@ -266,7 +269,7 @@ function parseSourceLines(apiData) {
           if (m) respLines.push({ sourceName: m[2], hex: m[1] });
         }
       } else {
-        console.error("Decryption of tobeparsed blob failed — key may need updating");
+        console.error('[parseSourceLines] Decryption of tobeparsed blob failed — key may need updating');
       }
     }
   } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
@@ -282,7 +285,6 @@ function parseSourceLines(apiData) {
   return respLines;
 }
 
-// Shared API fetch used by both getEpisodeUrl and getAllEpisodeLinks
 async function fetchEpisodeApiData(showId, epNo, mode) {
   const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
     episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
@@ -306,24 +308,23 @@ async function fetchEpisodeApiData(showId, epNo, mode) {
     };
 
     axios.get(apiUrl, {
-      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://allanime.to' },
       timeout: 8000
     }).then(r => {
       getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null;
       tryResolve();
-    }).catch(() => { getResult = null; tryResolve(); });
+    }).catch((e) => { console.error('[fetchEpisodeApiData] GET failed:', e.message); getResult = null; tryResolve(); });
 
     axiosInstance.post(`${ALLANIME_API}/api`, {
       variables: { showId, translationType: mode, episodeString: epNo },
       query: episodeEmbedGql
     }).then(r => { postResult = r.data; tryResolve(); })
-      .catch(() => { postResult = null; tryResolve(); });
+      .catch((e) => { console.error('[fetchEpisodeApiData] POST failed:', e.message); postResult = null; tryResolve(); });
 
     setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 10000);
   });
 }
 
-// Shared provider fetch
 async function fetchAllLinks(respLines) {
   const providerDefs = [
     { name: 'Default', filemoon: false },
@@ -362,7 +363,6 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
     if (allLinks.length === 0) return null;
 
     allLinks.sort((a, b) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
-    console.log(`[Quality] Requested: ${quality} | Available:`, allLinks.map(l => `${l.resolution} → ${l.url.substring(0, 60)}...`));
 
     let selected;
     if (quality === 'best') {
@@ -380,11 +380,10 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
       }
     }
 
-    console.log(`[Quality] Selected: ${selected.resolution} → ${selected.url.substring(0, 80)}...`);
     return selected.url.replace(/([^:])\/\//g, '$1/');
 
   } catch (e) {
-    console.error("Failed to get episode URL:", e.message);
+    console.error('[getEpisodeUrl] Error:', e.message);
     if (e.message && e.message.startsWith('NEED_CAPTCHA')) throw e;
     return null;
   }
@@ -407,7 +406,6 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
     let allLinks = await fetchAllLinks(respLines);
     if (allLinks.length === 0) return [];
 
-    // Sort: mp4 before hls, then by resolution descending
     allLinks.sort((a, b) => {
       const aIsHls = a.url.includes('.m3u8') ? 1 : 0;
       const bIsHls = b.url.includes('.m3u8') ? 1 : 0;
@@ -415,7 +413,6 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
       return (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0);
     });
 
-    // Reorder based on quality preference
     if (quality !== 'best' && quality !== 'worst') {
       const requestedRes = parseInt(quality) || 9999;
       const preferred = allLinks.find(l => l.resolution.includes(quality));
@@ -431,10 +428,10 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
       allLinks.reverse();
     }
 
-    // Clean URLs
     return allLinks.map(l => ({ ...l, url: l.url.replace(/([^:])\/\//g, '$1/') }));
 
   } catch (e) {
+    console.error('[getAllEpisodeLinks] Error:', e.message);
     if (e.message?.startsWith('NEED_CAPTCHA')) throw e;
     return [];
   }
@@ -467,6 +464,7 @@ async function getEpisodeInfo(showId, epNo) {
       thumbnails
     };
   } catch (e) {
+    console.error('[getEpisodeInfo] Error:', e.message);
     return null;
   }
 }
@@ -484,6 +482,7 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
 
     return [...new Set(allLinks.map(l => l.resolution))];
   } catch (e) {
+    console.error('[getAvailableQualities] Error:', e.message);
     return [];
   }
 }
