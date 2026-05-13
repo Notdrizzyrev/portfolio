@@ -2,8 +2,8 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
-const ALLANIME_REFR = "https://allanime.to";
-const ALLANIME_BASE = "allanime.to";
+const ALLANIME_REFR = "https://allmanga.to";
+const ALLANIME_BASE = "allmanga.to";
 const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
 const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 
@@ -308,7 +308,7 @@ async function fetchEpisodeApiData(showId, epNo, mode) {
     };
 
     axios.get(apiUrl, {
-      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://allanime.to' },
+      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://allmanga.to' },
       timeout: 8000
     }).then(r => {
       getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null;
