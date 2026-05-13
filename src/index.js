@@ -69,11 +69,11 @@ app.get('/episodes/:id', async (req, res) => {
 
 // ── Episode stream URL (JSON) ─────────────────────────────────────────────────
 app.get('/episode_url', async (req, res) => {
-  const { show_id, ep_no, quality = 'best', mode: rawMode } = req.query;
+  const { show_id, ep_no, quality = 'best', mode: rawMode, title } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
   if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
+    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality, title || null);
     if (!url) return res.status(404).json({ error: 'Not found' });
     res.json({ episode_url: url, mode, quality });
   } catch (e) {
@@ -83,11 +83,11 @@ app.get('/episode_url', async (req, res) => {
 
 // ── Stream / proxy video directly ────────────────────────────────────────────
 app.get('/play', async (req, res) => {
-  const { show_id, ep_no, quality = 'best', mode: rawMode, download } = req.query;
+  const { show_id, ep_no, quality = 'best', mode: rawMode, download, title } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
   if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
+    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality, title || null);
     if (!url) return res.status(404).json({ error: 'Not found' });
 
     const headers = {
