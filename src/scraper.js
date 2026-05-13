@@ -54,7 +54,7 @@ async function getFilemoonLinks(providerPath) {
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
-        const response = await axiosInstance.get(fetchUrl, { timeout: 6000 });
+        const response = await axiosInstance.get(fetchUrl, { timeout: 3000 });
         const fmData = response.data;
 
         if (fmData && fmData.iv && fmData.payload && fmData.key_parts) {
@@ -135,7 +135,7 @@ async function getLinks(providerPath) {
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
-        const response = await axiosInstance.get(fetchUrl, { timeout: 6000 });
+        const response = await axiosInstance.get(fetchUrl, { timeout: 3000 });
         const providerData = response.data;
 
         if (providerData.links && Array.isArray(providerData.links)) {
@@ -327,83 +327,58 @@ function parseSourceLines(apiData) {
     return respLines;
 }
 
-// When AllAnime splits a long series across multiple show entries (e.g. One Piece),
-// the original show_id may not have high-numbered episodes. This searches for
-// other AllAnime entries matching the title and tries each one that plausibly
-// has the episode, returning the first URL that resolves.
-async function tryAlternativeShowIds(titleHint, knownId, epNo, mode, quality) {
-    try {
-        const results = await searchAnime(titleHint, false);
-        // Filter to candidates that aren't the one we already tried, and that
-        // claim to have at least as many episodes as we're asking for
-        const epNum = parseFloat(epNo);
-        const candidates = results.filter(r =>
-            r.id !== knownId &&
-            (r.episodes_sub >= epNum || r.episodes_dub >= epNum || r.episodes_sub === 0)
-        );
-        console.log(`[Fallback] Trying ${candidates.length} alternative show IDs for ep ${epNo} of "${titleHint}"`);
-        for (const show of candidates) {
-            // Quickly verify AllAnime actually lists this episode for this entry
-            const epList = await getEpisodesList(show.id, mode);
-            const hasEp = epList.some(e => parseFloat(e) === epNum);
-            if (!hasEp) continue;
-            console.log(`[Fallback] Found ep ${epNo} in alt show "${show.title}" (${show.id})`);
-            // Pass no titleHint to avoid infinite recursion
-            const url = await getEpisodeUrl(show.id, epNo, mode, quality, null);
-            if (url) return url;
-        }
-    } catch (e) {
-        console.warn('[Fallback] Alt show ID search failed:', e.message);
-    }
-    return null;
-}
-
-async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best', titleHint = null) {
-    const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-        episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
-            episodeString
-            sourceUrls
-        }
-    }`;
-
+async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
     try {
         let apiData = null;
 
-        // v4.14.0: Try persisted query GET request first (bypasses captcha)
-        try {
-            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-
-            const getResp = await axios.get(apiUrl, {
-                headers: {
-                    'User-Agent': AGENT,
-                    'Referer': ALLANIME_REFR,
-                    'Origin': 'https://youtu-chan.com'
-                },
-                timeout: 8000
-            });
-
-            const rawText = JSON.stringify(getResp.data);
-            if (rawText && rawText.includes('tobeparsed')) {
-                apiData = getResp.data;
+        // Fire GET (persisted query) and POST simultaneously — take whichever returns valid data first.
+        // Old approach: try GET, wait up to 8s for it to fail, THEN start POST = up to 16s wasted.
+        // New approach: both start at the same time, typically resolves in 1-3s.
+        const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
+                episodeString
+                sourceUrls
             }
-        } catch (e) {
-            // GET request failed, will fall back to POST
-        }
+        }`;
+        const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+        const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+        const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
 
-        // Fallback: POST request (original method)
-        if (!apiData) {
-            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
-                variables: {
-                    showId: showId,
-                    translationType: mode,
-                    episodeString: epNo
-                },
+        apiData = await new Promise((resolve) => {
+            let settled = false;
+            let getResult = undefined;  // undefined=pending, null=failed/no-data, object=valid
+            let postResult = undefined;
+
+            const tryResolve = () => {
+                if (settled) return;
+                // GET returned valid data → use it immediately
+                if (getResult != null) { settled = true; resolve(getResult); return; }
+                // POST returned valid data → use it immediately (don't wait for slow GET)
+                if (postResult != null) { settled = true; resolve(postResult); return; }
+                // Both done but no valid data
+                if (getResult !== undefined && postResult !== undefined) { settled = true; resolve(null); return; }
+                // One is still pending — keep waiting
+            };
+
+            // GET: persisted query — fast when it works (~1s), fails silently otherwise
+            axios.get(apiUrl, {
+                headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+                timeout: 8000
+            }).then(r => {
+                getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null;
+                tryResolve();
+            }).catch(() => { getResult = null; tryResolve(); });
+
+            // POST: reliable fallback — starts immediately in parallel
+            axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: { showId, translationType: mode, episodeString: epNo },
                 query: episodeEmbedGql
-            });
-            apiData = postResp.data;
-        }
+            }).then(r => { postResult = r.data; tryResolve(); })
+              .catch(() => { postResult = null; tryResolve(); });
+
+            // Hard safety cap — should never be hit in practice
+            setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 10000);
+        });
 
         // Check for NEED_CAPTCHA or other API-level errors
         if (apiData.errors && apiData.errors.length > 0) {
@@ -417,14 +392,7 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best', title
         // Parse source lines from the API response
         let respLines = parseSourceLines(apiData);
 
-        if (respLines.length === 0) {
-            // Episode not on this show_id at all — try alternative entries
-            if (titleHint) {
-                const fallbackUrl = await tryAlternativeShowIds(titleHint, showId, epNo, mode, quality);
-                if (fallbackUrl) return fallbackUrl;
-            }
-            return null;
-        }
+        if (respLines.length === 0) return null;
 
         // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4 (filemoon, new in v4.14.0)
         const providerDefs = [
@@ -452,14 +420,7 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best', title
         const results = await Promise.all(linkPromises);
         let allLinks = results.flat();
 
-        if (allLinks.length === 0) {
-            // No links from this show_id — try alternative entries if we have a title hint
-            if (titleHint) {
-                const fallbackUrl = await tryAlternativeShowIds(titleHint, showId, epNo, mode, quality);
-                if (fallbackUrl) return fallbackUrl;
-            }
-            return null;
-        }
+        if (allLinks.length === 0) return null;
 
         // Sort numerically descending (best first)
         allLinks.sort((a, b) => {
@@ -549,31 +510,33 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
     try {
         let apiData = null;
 
-        try {
-            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+        const qualGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
+        }`;
+        const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+        const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+        const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
 
-            const getResp = await axios.get(apiUrl, {
-                headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
-                timeout: 8000
-            });
-            const rawText = JSON.stringify(getResp.data);
-            if (rawText && rawText.includes('tobeparsed')) apiData = getResp.data;
-        } catch (e) { /* fallback to POST */ }
+        apiData = await new Promise((resolve) => {
+            let settled = false;
+            let getResult = undefined;
+            let postResult = undefined;
+            const tryResolve = () => {
+                if (settled) return;
+                if (getResult != null) { settled = true; resolve(getResult); return; }
+                if (postResult != null) { settled = true; resolve(postResult); return; }
+                if (getResult !== undefined && postResult !== undefined) { settled = true; resolve(null); return; }
+            };
+            axios.get(apiUrl, { headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' }, timeout: 8000 })
+                .then(r => { getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null; tryResolve(); })
+                .catch(() => { getResult = null; tryResolve(); });
+            axiosInstance.post(`${ALLANIME_API}/api`, { variables: { showId, translationType: mode, episodeString: epNo }, query: qualGql })
+                .then(r => { postResult = r.data; tryResolve(); })
+                .catch(() => { postResult = null; tryResolve(); });
+            setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 10000);
+        });
 
-        if (!apiData) {
-            const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-                episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
-            }`;
-            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
-                variables: { showId, translationType: mode, episodeString: epNo },
-                query: episodeEmbedGql
-            });
-            apiData = postResp.data;
-        }
-
-        if (apiData.errors && apiData.errors.length > 0) return [];
+        if (!apiData || (apiData.errors && apiData.errors.length > 0)) return [];
 
         let respLines = parseSourceLines(apiData);
         if (respLines.length === 0) return [];
@@ -608,8 +571,8 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
 }
 
 // Alias for debug endpoint in index.js
-async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best', titleHint = null) {
-    const url = await getEpisodeUrl(showId, epNo, mode, quality, titleHint);
+async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best') {
+    const url = await getEpisodeUrl(showId, epNo, mode, quality);
     return { url, debug: {} };
 }
 
