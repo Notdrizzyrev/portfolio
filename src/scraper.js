@@ -5,7 +5,10 @@ const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/2010010
 const ALLANIME_REFR = "https://allmanga.to";
 const ALLANIME_BASE = "allanime.day";
 const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
-const ALLANIME_KEY = crypto.createHash('sha256').update('anbbpo'.split('').reverse().join('')).digest('hex');
+// Primary key (confirmed current in ani-cli master): SHA-256("Xot36i3lK3:v1")
+const ALLANIME_KEY     = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
+// Alternate key spotted in AllAnime JS bundle (anbbpo reversed): SHA-256("opbbna")
+const ALLANIME_KEY_ALT = crypto.createHash('sha256').update('anbbpo'.split('').reverse().join('')).digest('hex');
 
 // Persisted query hash for episode embeds (from ani-cli v4.14.0)
 const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
@@ -18,41 +21,51 @@ const axiosInstance = axios.create({
     timeout: 8000
 });
 
-function decrypt(blob) {
-    try {
-        const data = Buffer.from(blob, 'base64');
-        // Current AllAnime scheme (from JS bundle cdn.allanime.day/all/manga/a10191a.js):
-        //   key  = SHA-256("anbbpo" reversed) = SHA-256("opbbna")
-        //   algo = AES-256-GCM
-        //   format: first 12 bytes = IV, last 16 bytes = auth tag, middle = ciphertext
-        const iv         = data.slice(0, 12);
-        const authTag    = data.slice(data.length - 16);
-        const ciphertext = data.slice(12, data.length - 16);
+function tryCtr(data, key) {
+    // CTR scheme: skip 1 byte version, IV=bytes[1..12], ciphertext=bytes[13..len-16], counter=IV+"00000002"
+    const iv = data.slice(1, 13);
+    const ctLen = data.length - 13 - 16;
+    if (ctLen <= 0) return null;
+    const ciphertext = data.slice(13, 13 + ctLen);
+    const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
+    const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(key, 'hex'), ctr);
+    let out = decipher.update(ciphertext);
+    out = Buffer.concat([out, decipher.final()]);
+    return out.toString('utf8');
+}
 
-        const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(ALLANIME_KEY, 'hex'), iv);
-        decipher.setAuthTag(authTag);
-        let decrypted = decipher.update(ciphertext);
-        decrypted = Buffer.concat([decrypted, decipher.final()]);
-        return decrypted.toString('utf8');
-    } catch (e) {
-        // Fallback: try old AES-256-CTR scheme (v4.13/v4.14, key = SHA-256("Xot36i3lK3:v1"))
+function tryGcm(data, key) {
+    // GCM scheme: IV=bytes[0..11], ciphertext=bytes[12..len-16], authTag=last 16 bytes
+    const iv = data.slice(0, 12);
+    const authTag = data.slice(data.length - 16);
+    const ciphertext = data.slice(12, data.length - 16);
+    if (ciphertext.length <= 0) return null;
+    const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv);
+    decipher.setAuthTag(authTag);
+    let out = decipher.update(ciphertext);
+    out = Buffer.concat([out, decipher.final()]);
+    return out.toString('utf8');
+}
+
+function isValidDecrypted(s) {
+    return s && (s.includes('sourceUrl') || s.includes('sourceName'));
+}
+
+function decrypt(blob) {
+    const data = Buffer.from(blob, 'base64');
+    const attempts = [
+        () => tryCtr(data, ALLANIME_KEY),     // 1. CTR + primary key (current ani-cli master)
+        () => tryCtr(data, ALLANIME_KEY_ALT), // 2. CTR + alt key (anbbpo reversed)
+        () => tryGcm(data, ALLANIME_KEY_ALT), // 3. GCM + alt key (anbbpo reversed)
+        () => tryGcm(data, ALLANIME_KEY),     // 4. GCM + primary key
+    ];
+    for (const attempt of attempts) {
         try {
-            const data = Buffer.from(blob, 'base64');
-            const oldKey = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
-            const iv = data.slice(1, 13);
-            const ctLen = data.length - 13 - 16;
-            const ciphertext = data.slice(13, 13 + ctLen);
-            const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
-            const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(oldKey, 'hex'), ctr);
-            let decrypted = decipher.update(ciphertext);
-            decrypted = Buffer.concat([decrypted, decipher.final()]);
-            const result = decrypted.toString('utf8');
-            if (result.includes('sourceUrl') || result.includes('sourceName')) return result;
-            return null;
-        } catch (e2) {
-            return null;
-        }
+            const result = attempt();
+            if (isValidDecrypted(result)) return result;
+        } catch (e) { /* try next */ }
     }
+    return null;
 }
 
 // Filemoon provider decryption (v4.14.0)
