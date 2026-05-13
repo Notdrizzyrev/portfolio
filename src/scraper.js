@@ -282,24 +282,8 @@ function parseSourceLines(apiData) {
     const hasTobeparsed = rawJson.includes('"tobeparsed"');
     let respLines = [];
 
-    function extractFromText(text) {
-        const parts = text.replace(/[{}]/g, '\n').split('\n');
-        for (const part of parts) {
-            // Hex-encoded entry (starts with --)
-            const mHex = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-            if (mHex) { respLines.push({ sourceName: mHex[2], hex: mHex[1] }); continue; }
-            // Reversed field order
-            const mHexR = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"--([^"]*)"/);
-            if (mHexR) { respLines.push({ sourceName: mHexR[1], hex: mHexR[2] }); continue; }
-            // Direct URL entry (AllAnime returns these for some episodes — no -- prefix)
-            const mDirect = part.match(/"sourceUrl":"(https?:[^"]*)".*"sourceName":"([^"]*)"/);
-            if (mDirect) { respLines.push({ sourceName: mDirect[2], directUrl: mDirect[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/') }); continue; }
-            const mDirectR = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"(https?:[^"]*)"/);
-            if (mDirectR) { respLines.push({ sourceName: mDirectR[1], directUrl: mDirectR[2].replace(/\\u002F/g, '/').replace(/\\\//g, '/') }); }
-        }
-    }
-
     if (hasTobeparsed) {
+        // Extract the tobeparsed blob from wherever it lives in the response
         const data = apiData.data;
         const blob = apiData.tobeparsed ||
             (data && data.tobeparsed) ||
@@ -308,6 +292,7 @@ function parseSourceLines(apiData) {
 
         let blobValue = blob;
         if (!blobValue) {
+            // Fallback: regex extraction from raw JSON
             const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
             if (tbpMatch) blobValue = tbpMatch[1];
         }
@@ -315,23 +300,65 @@ function parseSourceLines(apiData) {
         if (blobValue) {
             const plain = decrypt(blobValue);
             if (plain) {
-                extractFromText(plain);
+                const parts = plain.replace(/[{}]/g, '\n').split('\n');
+                for (const part of parts) {
+                    const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+                    if (m) {
+                        respLines.push({ sourceName: m[2], hex: m[1] });
+                    }
+                }
             } else {
                 console.error("Decryption of tobeparsed blob failed — key may need updating");
             }
         }
     } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
+        // Fallback: unencrypted sourceUrls
         const raw = JSON.stringify(apiData.data.episode.sourceUrls);
         const cleaned = raw.replace(/\\u002F/g, '/').replace(/\\/g, '');
-        extractFromText(cleaned);
+        const parts = cleaned.replace(/[{}]/g, '\n').split('\n');
+        for (const part of parts) {
+            const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+            if (m) {
+                respLines.push({ sourceName: m[2], hex: m[1] });
+            }
+        }
     }
 
-    console.log(`[parseSourceLines] Found ${respLines.length} sources:`, respLines.map(r => `${r.sourceName}(${r.hex ? 'hex' : 'direct'})`));
     return respLines;
 }
 
-async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
-    epNo = String(epNo); // AllAnime API requires episodeString to be a string
+// When AllAnime splits a long series across multiple show entries (e.g. One Piece),
+// the original show_id may not have high-numbered episodes. This searches for
+// other AllAnime entries matching the title and tries each one that plausibly
+// has the episode, returning the first URL that resolves.
+async function tryAlternativeShowIds(titleHint, knownId, epNo, mode, quality) {
+    try {
+        const results = await searchAnime(titleHint, false);
+        // Filter to candidates that aren't the one we already tried, and that
+        // claim to have at least as many episodes as we're asking for
+        const epNum = parseFloat(epNo);
+        const candidates = results.filter(r =>
+            r.id !== knownId &&
+            (r.episodes_sub >= epNum || r.episodes_dub >= epNum || r.episodes_sub === 0)
+        );
+        console.log(`[Fallback] Trying ${candidates.length} alternative show IDs for ep ${epNo} of "${titleHint}"`);
+        for (const show of candidates) {
+            // Quickly verify AllAnime actually lists this episode for this entry
+            const epList = await getEpisodesList(show.id, mode);
+            const hasEp = epList.some(e => parseFloat(e) === epNum);
+            if (!hasEp) continue;
+            console.log(`[Fallback] Found ep ${epNo} in alt show "${show.title}" (${show.id})`);
+            // Pass no titleHint to avoid infinite recursion
+            const url = await getEpisodeUrl(show.id, epNo, mode, quality, null);
+            if (url) return url;
+        }
+    } catch (e) {
+        console.warn('[Fallback] Alt show ID search failed:', e.message);
+    }
+    return null;
+}
+
+async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best', titleHint = null) {
     const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
         episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
             episodeString
@@ -390,7 +417,14 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
         // Parse source lines from the API response
         let respLines = parseSourceLines(apiData);
 
-        if (respLines.length === 0) return null;
+        if (respLines.length === 0) {
+            // Episode not on this show_id at all — try alternative entries
+            if (titleHint) {
+                const fallbackUrl = await tryAlternativeShowIds(titleHint, showId, epNo, mode, quality);
+                if (fallbackUrl) return fallbackUrl;
+            }
+            return null;
+        }
 
         // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4 (filemoon, new in v4.14.0)
         const providerDefs = [
@@ -405,12 +439,6 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
         const linkPromises = providerDefs.map(async (prov) => {
             const entry = respLines.find(r => r.sourceName === prov.name);
             if (!entry) return [];
-
-            // Direct URL entries don't need hex decoding
-            if (entry.directUrl) {
-                return getLinks(entry.directUrl);
-            }
-
             const decodedPath = decodeProviderId(entry.hex);
             if (!decodedPath) return [];
 
@@ -424,7 +452,14 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
         const results = await Promise.all(linkPromises);
         let allLinks = results.flat();
 
-        if (allLinks.length === 0) return null;
+        if (allLinks.length === 0) {
+            // No links from this show_id — try alternative entries if we have a title hint
+            if (titleHint) {
+                const fallbackUrl = await tryAlternativeShowIds(titleHint, showId, epNo, mode, quality);
+                if (fallbackUrl) return fallbackUrl;
+            }
+            return null;
+        }
 
         // Sort numerically descending (best first)
         allLinks.sort((a, b) => {
@@ -554,7 +589,6 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
         const linkPromises = providerDefs.map(async (prov) => {
             const entry = respLines.find(r => r.sourceName === prov.name);
             if (!entry) return [];
-            if (entry.directUrl) return getLinks(entry.directUrl);
             const decodedPath = decodeProviderId(entry.hex);
             if (!decodedPath) return [];
             if (prov.filemoon) return getFilemoonLinks(decodedPath);
@@ -574,8 +608,8 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
 }
 
 // Alias for debug endpoint in index.js
-async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best') {
-    const url = await getEpisodeUrl(showId, epNo, mode, quality);
+async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best', titleHint = null) {
+    const url = await getEpisodeUrl(showId, epNo, mode, quality, titleHint);
     return { url, debug: {} };
 }
 
