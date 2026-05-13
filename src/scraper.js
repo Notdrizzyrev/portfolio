@@ -282,8 +282,24 @@ function parseSourceLines(apiData) {
     const hasTobeparsed = rawJson.includes('"tobeparsed"');
     let respLines = [];
 
+    function extractFromText(text) {
+        const parts = text.replace(/[{}]/g, '\n').split('\n');
+        for (const part of parts) {
+            // Hex-encoded entry (starts with --)
+            const mHex = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+            if (mHex) { respLines.push({ sourceName: mHex[2], hex: mHex[1] }); continue; }
+            // Reversed field order
+            const mHexR = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"--([^"]*)"/);
+            if (mHexR) { respLines.push({ sourceName: mHexR[1], hex: mHexR[2] }); continue; }
+            // Direct URL entry (AllAnime returns these for some episodes — no -- prefix)
+            const mDirect = part.match(/"sourceUrl":"(https?:[^"]*)".*"sourceName":"([^"]*)"/);
+            if (mDirect) { respLines.push({ sourceName: mDirect[2], directUrl: mDirect[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/') }); continue; }
+            const mDirectR = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"(https?:[^"]*)"/);
+            if (mDirectR) { respLines.push({ sourceName: mDirectR[1], directUrl: mDirectR[2].replace(/\\u002F/g, '/').replace(/\\\//g, '/') }); }
+        }
+    }
+
     if (hasTobeparsed) {
-        // Extract the tobeparsed blob from wherever it lives in the response
         const data = apiData.data;
         const blob = apiData.tobeparsed ||
             (data && data.tobeparsed) ||
@@ -292,7 +308,6 @@ function parseSourceLines(apiData) {
 
         let blobValue = blob;
         if (!blobValue) {
-            // Fallback: regex extraction from raw JSON
             const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
             if (tbpMatch) blobValue = tbpMatch[1];
         }
@@ -300,34 +315,23 @@ function parseSourceLines(apiData) {
         if (blobValue) {
             const plain = decrypt(blobValue);
             if (plain) {
-                const parts = plain.replace(/[{}]/g, '\n').split('\n');
-                for (const part of parts) {
-                    const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-                    if (m) {
-                        respLines.push({ sourceName: m[2], hex: m[1] });
-                    }
-                }
+                extractFromText(plain);
             } else {
                 console.error("Decryption of tobeparsed blob failed — key may need updating");
             }
         }
     } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
-        // Fallback: unencrypted sourceUrls
         const raw = JSON.stringify(apiData.data.episode.sourceUrls);
         const cleaned = raw.replace(/\\u002F/g, '/').replace(/\\/g, '');
-        const parts = cleaned.replace(/[{}]/g, '\n').split('\n');
-        for (const part of parts) {
-            const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-            if (m) {
-                respLines.push({ sourceName: m[2], hex: m[1] });
-            }
-        }
+        extractFromText(cleaned);
     }
 
+    console.log(`[parseSourceLines] Found ${respLines.length} sources:`, respLines.map(r => `${r.sourceName}(${r.hex ? 'hex' : 'direct'})`));
     return respLines;
 }
 
 async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+    epNo = String(epNo); // AllAnime API requires episodeString to be a string
     const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
         episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
             episodeString
@@ -401,6 +405,12 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
         const linkPromises = providerDefs.map(async (prov) => {
             const entry = respLines.find(r => r.sourceName === prov.name);
             if (!entry) return [];
+
+            // Direct URL entries don't need hex decoding
+            if (entry.directUrl) {
+                return getLinks(entry.directUrl);
+            }
+
             const decodedPath = decodeProviderId(entry.hex);
             if (!decodedPath) return [];
 
@@ -544,6 +554,7 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
         const linkPromises = providerDefs.map(async (prov) => {
             const entry = respLines.find(r => r.sourceName === prov.name);
             if (!entry) return [];
+            if (entry.directUrl) return getLinks(entry.directUrl);
             const decodedPath = decodeProviderId(entry.hex);
             if (!decodedPath) return [];
             if (prov.filemoon) return getFilemoonLinks(decodedPath);
