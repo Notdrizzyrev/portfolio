@@ -10,8 +10,13 @@ const ALLANIME_KEY     = crypto.createHash('sha256').update('Xot36i3lK3:v1').dig
 // Alternate key spotted in AllAnime JS bundle (anbbpo reversed): SHA-256("opbbna")
 const ALLANIME_KEY_ALT = crypto.createHash('sha256').update('anbbpo'.split('').reverse().join('')).digest('hex');
 
-// Persisted query hash for episode embeds (from ani-cli v4.14.0)
-const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
+// Full GQL query for episode embeds — sent as GET param to bypass Cloudflare CAPTCHA
+// (The old persisted hash approach is dropped; it was stale and caused "No episode" errors)
+const EPISODE_EMBED_GQL = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+  episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
+    episodeString sourceUrls
+  }
+}`;
 
 const axiosInstance = axios.create({
     headers: {
@@ -71,12 +76,10 @@ function decrypt(blob) {
 // Filemoon provider decryption (v4.14.0)
 // Decodes base64url to hex
 function b64urlToHex(b64url) {
-    // Add padding
     let padded = b64url;
     const mod = padded.length % 4;
     if (mod === 2) padded += '==';
     else if (mod === 3) padded += '=';
-    // Convert base64url to standard base64
     const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
     return Buffer.from(b64, 'base64').toString('hex');
 }
@@ -95,7 +98,6 @@ async function getFilemoonLinks(providerPath) {
             const keyHex = b64urlToHex(kp1) + b64urlToHex(kp2);
             const ivHex = b64urlToHex(fmData.iv) + '00000002';
 
-            // Decode payload from base64url
             let payloadB64 = fmData.payload;
             const pMod = payloadB64.length % 4;
             if (pMod === 2) payloadB64 += '==';
@@ -103,7 +105,6 @@ async function getFilemoonLinks(providerPath) {
             payloadB64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
             const payloadBuf = Buffer.from(payloadB64, 'base64');
 
-            // Strip last 16 bytes (auth tag)
             const ctLen = payloadBuf.length - 16;
             const ciphertext = payloadBuf.slice(0, ctLen);
 
@@ -112,10 +113,8 @@ async function getFilemoonLinks(providerPath) {
             decrypted = Buffer.concat([decrypted, decipher.final()]);
             const plain = decrypted.toString('utf8');
 
-            // Parse the decrypted JSON for video URLs
             const parts = plain.replace(/[{}\[\]]/g, '\n').split('\n');
             for (const part of parts) {
-                // Match "url":"..." and "height":NNN in either order
                 const m1 = part.match(/"url":"([^"]*)".*"height":(\d+)/);
                 const m2 = part.match(/"height":(\d+).*"url":"([^"]*)"/);
                 if (m1) {
@@ -157,13 +156,11 @@ function decodeProviderId(hex) {
 async function getLinks(providerPath) {
     let allLinks = [];
 
-    // If path contains tools.fast4speed.rsvp, output it directly (direct mp4 link)
     if (providerPath.includes('tools.fast4speed.rsvp')) {
         allLinks.push({ resolution: 'Yt', url: providerPath });
         return allLinks;
     }
 
-    // For non-direct URLs, fetch the provider JSON
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
@@ -176,7 +173,6 @@ async function getLinks(providerPath) {
                 const res = link.resolutionStr || 'unknown';
 
                 if (url && url.includes('repackager.wixmp.com')) {
-                    // wixmp repackager: extract individual quality URLs (anime.sh lines 35-40)
                     const cleaned = url.replace('repackager.wixmp.com/', '').replace(/\.urlset.*/, '');
                     const qualitiesMatch = url.match(/\/,([^/]*),\/mp4/);
                     if (qualitiesMatch) {
@@ -198,7 +194,7 @@ async function getLinks(providerPath) {
             allLinks.push({ resolution: 'hls', url: providerData.hls.url });
         }
     } catch (e) {
-        // Provider fetch failed — timed out or returned error
+        // Provider fetch failed
     }
 
     return allLinks;
@@ -315,7 +311,6 @@ function parseSourceLines(apiData) {
     let respLines = [];
 
     if (hasTobeparsed) {
-        // Extract the tobeparsed blob from wherever it lives in the response
         const data = apiData.data;
         const blob = apiData.tobeparsed ||
             (data && data.tobeparsed) ||
@@ -324,7 +319,6 @@ function parseSourceLines(apiData) {
 
         let blobValue = blob;
         if (!blobValue) {
-            // Fallback: regex extraction from raw JSON
             const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
             if (tbpMatch) blobValue = tbpMatch[1];
         }
@@ -344,7 +338,6 @@ function parseSourceLines(apiData) {
             }
         }
     } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
-        // Fallback: unencrypted sourceUrls
         const raw = JSON.stringify(apiData.data.episode.sourceUrls);
         const cleaned = raw.replace(/\\u002F/g, '/').replace(/\\/g, '');
         const parts = cleaned.replace(/[{}]/g, '\n').split('\n');
@@ -359,23 +352,23 @@ function parseSourceLines(apiData) {
     return respLines;
 }
 
+// Builds the GET URL using the full GQL query as a URL param.
+// This bypasses Cloudflare CAPTCHA (which only triggers on POST) while
+// avoiding the stale persisted-hash problem that caused "No episode" errors.
+function buildEpisodeGetUrl(showId, mode, epNo) {
+    const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+    return `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&query=${encodeURIComponent(EPISODE_EMBED_GQL)}`;
+}
+
 async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
-    const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-        episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
-            episodeString
-            sourceUrls
-        }
-    }`;
+    const episodeEmbedGql = EPISODE_EMBED_GQL;
 
     try {
         let apiData = null;
 
-        // v4.14.0: Try persisted query GET request first (bypasses captcha)
+        // Try full-query GET first — bypasses Cloudflare CAPTCHA, no stale hash
         try {
-            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-
+            const apiUrl = buildEpisodeGetUrl(showId, mode, epNo);
             const getResp = await axios.get(apiUrl, {
                 headers: {
                     'User-Agent': AGENT,
@@ -386,18 +379,16 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
             });
 
             const rawText = JSON.stringify(getResp.data);
-            // Only accept GET response if it has tobeparsed AND no errors.
-            // If the GET returns errors (e.g. "No episode"), fall through to POST —
-            // POST uses a plain GQL query that doesn't depend on the persisted query hash.
             const getHasErrors = getResp.data.errors && getResp.data.errors.length > 0;
-            if (rawText && rawText.includes('tobeparsed') && !getHasErrors) {
+            // Accept if we got tobeparsed OR sourceUrls, and no errors
+            if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls')) && !getHasErrors) {
                 apiData = getResp.data;
             }
         } catch (e) {
-            // GET request failed, will fall back to POST
+            // GET failed, fall through to POST
         }
 
-        // Fallback: POST request (original method)
+        // Fallback: POST request
         if (!apiData) {
             const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
                 variables: {
@@ -424,7 +415,7 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
 
         if (respLines.length === 0) return null;
 
-        // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4 (filemoon, new in v4.14.0)
+        // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4 (filemoon)
         const providerDefs = [
             { name: 'Default', filemoon: false },
             { name: 'Yt-mp4', filemoon: false },
@@ -439,12 +430,8 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
             if (!entry) return [];
             const decodedPath = decodeProviderId(entry.hex);
             if (!decodedPath) return [];
-
-            if (prov.filemoon) {
-                return getFilemoonLinks(decodedPath);
-            } else {
-                return getLinks(decodedPath);
-            }
+            if (prov.filemoon) return getFilemoonLinks(decodedPath);
+            return getLinks(decodedPath);
         });
 
         const results = await Promise.all(linkPromises);
@@ -458,7 +445,7 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
             const resB = parseInt(b.resolution) || 0;
             return resB - resA;
         });
-        // Debug: Log all available links and selection
+
         console.log(`[Quality] Requested: ${quality} | Available:`, allLinks.map(l => `${l.resolution} → ${l.url.substring(0, 60)}...`));
 
         let selected;
@@ -469,10 +456,8 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
             selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[allLinks.length - 1];
         } else {
             const requestedRes = parseInt(quality) || 9999;
-            // Try exact match first
             selected = allLinks.find(l => l.resolution.includes(quality));
             if (!selected) {
-                // Find closest resolution at or below requested quality
                 const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
                 const atOrBelow = numeric.filter(l => parseInt(l.resolution) <= requestedRes);
                 if (atOrBelow.length > 0) {
@@ -485,13 +470,11 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
 
         console.log(`[Quality] Selected: ${selected.resolution} → ${selected.url.substring(0, 80)}...`);
 
-        // Clean up double slashes in URL path (but not in https://)
         let finalUrl = selected.url.replace(/([^:])\/\//g, '$1/');
         return finalUrl;
 
     } catch (e) {
         console.error("Failed to get episode URL:", e.message);
-        // Re-throw NEED_CAPTCHA so callers can handle it appropriately
         if (e.message && e.message.startsWith('NEED_CAPTCHA')) {
             throw e;
         }
@@ -521,7 +504,6 @@ async function getEpisodeInfo(showId, epNo) {
 
         const info = infos[0];
 
-        // Format thumbnails (some are relative paths)
         let thumbnails = info.thumbnails || [];
         thumbnails = thumbnails.map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
 
@@ -540,27 +522,24 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
     try {
         let apiData = null;
 
+        // Full-query GET — same CAPTCHA bypass as getEpisodeUrl
         try {
-            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-
+            const apiUrl = buildEpisodeGetUrl(showId, mode, epNo);
             const getResp = await axios.get(apiUrl, {
                 headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
                 timeout: 8000
             });
             const rawText = JSON.stringify(getResp.data);
-            const getHasErrors2 = getResp.data.errors && getResp.data.errors.length > 0;
-            if (rawText && rawText.includes('tobeparsed') && !getHasErrors2) apiData = getResp.data;
+            const getHasErrors = getResp.data.errors && getResp.data.errors.length > 0;
+            if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls')) && !getHasErrors) {
+                apiData = getResp.data;
+            }
         } catch (e) { /* fallback to POST */ }
 
         if (!apiData) {
-            const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-                episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
-            }`;
             const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
                 variables: { showId, translationType: mode, episodeString: epNo },
-                query: episodeEmbedGql
+                query: EPISODE_EMBED_GQL
             });
             apiData = postResp.data;
         }
@@ -591,7 +570,6 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
         let allLinks = results.flat();
         if (allLinks.length === 0) return [];
 
-        // Extract unique resolutions
         const resolutions = [...new Set(allLinks.map(l => l.resolution))];
         return resolutions;
     } catch (e) {
@@ -614,4 +592,3 @@ module.exports = {
     getEpisodeInfo,
     getAvailableQualities
 };
-
