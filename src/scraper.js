@@ -5,7 +5,7 @@ const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/2010010
 const ALLANIME_REFR = "https://allmanga.to";
 const ALLANIME_BASE = "allanime.day";
 const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
-const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
+const ALLANIME_KEY = crypto.createHash('sha256').update('anbbpo'.split('').reverse().join('')).digest('hex');
 
 // Persisted query hash for episode embeds (from ani-cli v4.14.0)
 const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
@@ -21,18 +21,37 @@ const axiosInstance = axios.create({
 function decrypt(blob) {
     try {
         const data = Buffer.from(blob, 'base64');
-        // v4.13+: skip 1st byte (version), IV = next 12 bytes, last 16 bytes = auth tag, middle = ciphertext
-        const iv = data.slice(1, 13);
-        const ctLen = data.length - 13 - 16;
-        const ciphertext = data.slice(13, 13 + ctLen);
-        const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
+        // Current AllAnime scheme (from JS bundle cdn.allanime.day/all/manga/a10191a.js):
+        //   key  = SHA-256("anbbpo" reversed) = SHA-256("opbbna")
+        //   algo = AES-256-GCM
+        //   format: first 12 bytes = IV, last 16 bytes = auth tag, middle = ciphertext
+        const iv         = data.slice(0, 12);
+        const authTag    = data.slice(data.length - 16);
+        const ciphertext = data.slice(12, data.length - 16);
 
-        const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(ALLANIME_KEY, 'hex'), ctr);
+        const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(ALLANIME_KEY, 'hex'), iv);
+        decipher.setAuthTag(authTag);
         let decrypted = decipher.update(ciphertext);
         decrypted = Buffer.concat([decrypted, decipher.final()]);
         return decrypted.toString('utf8');
     } catch (e) {
-        return null;
+        // Fallback: try old AES-256-CTR scheme (v4.13/v4.14, key = SHA-256("Xot36i3lK3:v1"))
+        try {
+            const data = Buffer.from(blob, 'base64');
+            const oldKey = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
+            const iv = data.slice(1, 13);
+            const ctLen = data.length - 13 - 16;
+            const ciphertext = data.slice(13, 13 + ctLen);
+            const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
+            const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(oldKey, 'hex'), ctr);
+            let decrypted = decipher.update(ciphertext);
+            decrypted = Buffer.concat([decrypted, decipher.final()]);
+            const result = decrypted.toString('utf8');
+            if (result.includes('sourceUrl') || result.includes('sourceName')) return result;
+            return null;
+        } catch (e2) {
+            return null;
+        }
     }
 }
 
@@ -54,7 +73,7 @@ async function getFilemoonLinks(providerPath) {
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
-        const response = await axiosInstance.get(fetchUrl, { timeout: 3000 });
+        const response = await axiosInstance.get(fetchUrl, { timeout: 6000 });
         const fmData = response.data;
 
         if (fmData && fmData.iv && fmData.payload && fmData.key_parts) {
@@ -135,7 +154,7 @@ async function getLinks(providerPath) {
     const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
     try {
-        const response = await axiosInstance.get(fetchUrl, { timeout: 3000 });
+        const response = await axiosInstance.get(fetchUrl, { timeout: 6000 });
         const providerData = response.data;
 
         if (providerData.links && Array.isArray(providerData.links)) {
@@ -328,57 +347,51 @@ function parseSourceLines(apiData) {
 }
 
 async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+    const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+        episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
+            episodeString
+            sourceUrls
+        }
+    }`;
+
     try {
         let apiData = null;
 
-        // Fire GET (persisted query) and POST simultaneously — take whichever returns valid data first.
-        // Old approach: try GET, wait up to 8s for it to fail, THEN start POST = up to 16s wasted.
-        // New approach: both start at the same time, typically resolves in 1-3s.
-        const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
-                episodeString
-                sourceUrls
-            }
-        }`;
-        const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-        const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-        const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+        // v4.14.0: Try persisted query GET request first (bypasses captcha)
+        try {
+            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
 
-        apiData = await new Promise((resolve) => {
-            let settled = false;
-            let getResult = undefined;  // undefined=pending, null=failed/no-data, object=valid
-            let postResult = undefined;
-
-            const tryResolve = () => {
-                if (settled) return;
-                // GET returned valid data → use it immediately
-                if (getResult != null) { settled = true; resolve(getResult); return; }
-                // POST returned valid data → use it immediately (don't wait for slow GET)
-                if (postResult != null) { settled = true; resolve(postResult); return; }
-                // Both done but no valid data
-                if (getResult !== undefined && postResult !== undefined) { settled = true; resolve(null); return; }
-                // One is still pending — keep waiting
-            };
-
-            // GET: persisted query — fast when it works (~1s), fails silently otherwise
-            axios.get(apiUrl, {
-                headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+            const getResp = await axios.get(apiUrl, {
+                headers: {
+                    'User-Agent': AGENT,
+                    'Referer': ALLANIME_REFR,
+                    'Origin': 'https://youtu-chan.com'
+                },
                 timeout: 8000
-            }).then(r => {
-                getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null;
-                tryResolve();
-            }).catch(() => { getResult = null; tryResolve(); });
+            });
 
-            // POST: reliable fallback — starts immediately in parallel
-            axiosInstance.post(`${ALLANIME_API}/api`, {
-                variables: { showId, translationType: mode, episodeString: epNo },
+            const rawText = JSON.stringify(getResp.data);
+            if (rawText && rawText.includes('tobeparsed')) {
+                apiData = getResp.data;
+            }
+        } catch (e) {
+            // GET request failed, will fall back to POST
+        }
+
+        // Fallback: POST request (original method)
+        if (!apiData) {
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: {
+                    showId: showId,
+                    translationType: mode,
+                    episodeString: epNo
+                },
                 query: episodeEmbedGql
-            }).then(r => { postResult = r.data; tryResolve(); })
-              .catch(() => { postResult = null; tryResolve(); });
-
-            // Hard safety cap — should never be hit in practice
-            setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 10000);
-        });
+            });
+            apiData = postResp.data;
+        }
 
         // Check for NEED_CAPTCHA or other API-level errors
         if (apiData.errors && apiData.errors.length > 0) {
@@ -510,33 +523,31 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
     try {
         let apiData = null;
 
-        const qualGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
-        }`;
-        const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-        const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-        const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+        try {
+            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
 
-        apiData = await new Promise((resolve) => {
-            let settled = false;
-            let getResult = undefined;
-            let postResult = undefined;
-            const tryResolve = () => {
-                if (settled) return;
-                if (getResult != null) { settled = true; resolve(getResult); return; }
-                if (postResult != null) { settled = true; resolve(postResult); return; }
-                if (getResult !== undefined && postResult !== undefined) { settled = true; resolve(null); return; }
-            };
-            axios.get(apiUrl, { headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' }, timeout: 8000 })
-                .then(r => { getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null; tryResolve(); })
-                .catch(() => { getResult = null; tryResolve(); });
-            axiosInstance.post(`${ALLANIME_API}/api`, { variables: { showId, translationType: mode, episodeString: epNo }, query: qualGql })
-                .then(r => { postResult = r.data; tryResolve(); })
-                .catch(() => { postResult = null; tryResolve(); });
-            setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 10000);
-        });
+            const getResp = await axios.get(apiUrl, {
+                headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+                timeout: 8000
+            });
+            const rawText = JSON.stringify(getResp.data);
+            if (rawText && rawText.includes('tobeparsed')) apiData = getResp.data;
+        } catch (e) { /* fallback to POST */ }
 
-        if (!apiData || (apiData.errors && apiData.errors.length > 0)) return [];
+        if (!apiData) {
+            const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+                episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
+            }`;
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: { showId, translationType: mode, episodeString: epNo },
+                query: episodeEmbedGql
+            });
+            apiData = postResp.data;
+        }
+
+        if (apiData.errors && apiData.errors.length > 0) return [];
 
         let respLines = parseSourceLines(apiData);
         if (respLines.length === 0) return [];
