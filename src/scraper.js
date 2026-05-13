@@ -386,7 +386,11 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
             });
 
             const rawText = JSON.stringify(getResp.data);
-            if (rawText && rawText.includes('tobeparsed')) {
+            // Only accept GET response if it has tobeparsed AND no errors.
+            // If the GET returns errors (e.g. "No episode"), fall through to POST —
+            // POST uses a plain GQL query that doesn't depend on the persisted query hash.
+            const getHasErrors = getResp.data.errors && getResp.data.errors.length > 0;
+            if (rawText && rawText.includes('tobeparsed') && !getHasErrors) {
                 apiData = getResp.data;
             }
         } catch (e) {
@@ -546,7 +550,8 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
                 timeout: 8000
             });
             const rawText = JSON.stringify(getResp.data);
-            if (rawText && rawText.includes('tobeparsed')) apiData = getResp.data;
+            const getHasErrors2 = getResp.data.errors && getResp.data.errors.length > 0;
+            if (rawText && rawText.includes('tobeparsed') && !getHasErrors2) apiData = getResp.data;
         } catch (e) { /* fallback to POST */ }
 
         if (!apiData) {
