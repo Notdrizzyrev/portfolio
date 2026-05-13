@@ -219,8 +219,8 @@ app.get('/debug-episode', async (req, res) => {
     report.steps.persistedGet = { status: 'failed', error: e.message };
   }
 
-  // Step 2: POST fallback if GET didn't give tobeparsed
-  if (!apiData) {
+  // Step 2: POST — always test independently so we can compare GET vs POST
+  {
     try {
       const gql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
         episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
