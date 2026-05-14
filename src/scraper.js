@@ -2,20 +2,63 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
-const ALLANIME_REFR = "https://allanime.to";
-const ALLANIME_BASE = "allanime.to";
-const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
+
+// All known AllAnime domains — scraper tests each on startup and locks onto the first working one
+const POSSIBLE_DOMAINS = [
+  'allanime.day', 'allanime.to', 'allmanga.to',
+  'allanime.pro', 'allanime.co', 'allanime.tv', 'allanime.site'
+];
+
+let ALLANIME_BASE = process.env.ALLANIME_DOMAIN || 'allanime.day';
+let ALLANIME_API  = `https://api.${ALLANIME_BASE}`;
+let ALLANIME_REFR = `https://${ALLANIME_BASE}`;
+let _domainReady  = false;
 const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 
 const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
 
 const axiosInstance = axios.create({
-  headers: {
-    'User-Agent': AGENT,
-    'Referer': ALLANIME_REFR
-  },
-  timeout: 8000
+  headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR },
+  timeout: 8000,
+  maxRedirects: 5
 });
+
+// Auto-discover working AllAnime domain at startup
+const _DISCOVERY_QUERY = {
+  variables: { search: { query: 'naruto', allowAdult: false, allowUnknown: false }, limit: 1, page: 1, countryOrigin: 'ALL' },
+  query: `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
+    shows(search: $search limit: $limit page: $page countryOrigin: $countryOrigin) { edges { _id name } }
+  }`
+};
+
+(async function discoverDomain() {
+  console.log('[Discovery] Testing AllAnime domains...');
+  for (const domain of POSSIBLE_DOMAINS) {
+    try {
+      const res = await axios.post(`https://api.${domain}/api`, _DISCOVERY_QUERY, {
+        headers: { 'User-Agent': AGENT, 'Referer': `https://${domain}`, 'Origin': `https://${domain}` },
+        timeout: 8000,
+        maxRedirects: 3
+      });
+      if (res.data?.data?.shows?.edges?.length > 0) {
+        ALLANIME_BASE = domain;
+        ALLANIME_API  = `https://api.${domain}`;
+        ALLANIME_REFR = `https://${domain}`;
+        axiosInstance.defaults.headers['Referer'] = ALLANIME_REFR;
+        _domainReady = true;
+        console.log(`✅ [Discovery] Working domain locked: api.${domain}`);
+        return;
+      } else {
+        console.log(`[Discovery] api.${domain} — responded but no data`);
+      }
+    } catch (e) {
+      const status = e.response?.status;
+      const location = e.response?.headers?.location || '';
+      console.log(`[Discovery] api.${domain} — ${status ? `HTTP ${status} → ${location}` : e.message}`);
+    }
+  }
+  console.error('[Discovery] ❌ No working AllAnime domain found. Streams will not work until one is available.');
+})();
 
 function decrypt(blob) {
   try {
@@ -308,7 +351,7 @@ async function fetchEpisodeApiData(showId, epNo, mode) {
     };
 
     axios.get(apiUrl, {
-      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://allanime.to' },
+      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': ALLANIME_REFR },
       timeout: 8000
     }).then(r => {
       getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null;
