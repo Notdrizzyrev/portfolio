@@ -85,22 +85,39 @@ function pickBest(results, targetTitle, threshold = 40) {
 const _idCache = new Map();
 
 /**
- * Resolve an AnimeVault showId (which may be a MAL id, a title string, or
- * already a Consumet provider id) to a { provider, id } pair.
+ * Resolve a showId to { provider, id }.
  *
- * Strategy:
- *  1. If it's already cached, return cache hit.
- *  2. Try searchAnimeOnProvider() with the raw id as a query (catches numeric
- *     MAL ids if the title isn't known).
- *  3. Caller can also pass `title` to seed the search — used by getAllEpisodeLinks.
+ * showId can be:
+ *   "gogoanime::naruto"   → pre-parsed namespace from a previous search result
+ *   "Naruto"              → plain title, searched via Consumet
+ *   "20"                  → numeric MAL id; use title param to search properly
+ *
+ * title (optional) gives a better search query than the raw showId.
  */
 async function resolveId(showId, title = null) {
   if (_idCache.has(showId)) return _idCache.get(showId);
 
-  const query = title || String(showId);
+  // Parse namespaced IDs like "gogoanime::naruto" that came from /search responses
+  if (typeof showId === 'string' && showId.includes('::')) {
+    const sep = showId.indexOf('::');
+    const provider = showId.slice(0, sep);
+    const id = showId.slice(sep + 2);
+    if (provider && id) {
+      const resolved = { provider, id, title: title || id };
+      _idCache.set(showId, resolved);
+      return resolved;
+    }
+  }
+
+  // Plain title or numeric MAL id — search for it
+  const query = title || (isNaN(showId) ? String(showId) : null);
+  if (!query) return null;
+
   const resolved = await searchBestMatch(query);
   if (resolved) {
     _idCache.set(showId, resolved);
+    // Also cache by the title so repeated lookups are instant
+    if (title) _idCache.set(title, resolved);
     return resolved;
   }
   return null;
@@ -275,13 +292,22 @@ async function getEpisodesList(showId, mode = 'sub') {
  * Returns array of { url, resolution, is_hls }
  */
 async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', title = null) {
-  // If title provided, seed the cache with it for better matching
-  if (title && !_idCache.has(showId)) {
-    const resolved = await searchBestMatch(title);
-    if (resolved) _idCache.set(showId, resolved);
+  // Seed cache with title — the title is always a better search query than
+  // a raw MAL numeric id.  If showId itself is already a clean title string
+  // (sent from the updated frontend), the cache hit is instant.
+  const effectiveTitle = title || (isNaN(showId) ? String(showId) : null);
+
+  if (effectiveTitle && !_idCache.has(showId)) {
+    // Pre-populate with a direct search so resolveId doesn't search for
+    // the literal showId string (e.g. "20" for Naruto).
+    const presolved = await searchBestMatch(effectiveTitle);
+    if (presolved) {
+      _idCache.set(showId, presolved);
+      _idCache.set(effectiveTitle, presolved);
+    }
   }
 
-  const resolved = await resolveId(showId, title);
+  const resolved = await resolveId(showId, effectiveTitle);
   if (!resolved) return [];
 
   const { provider, id } = resolved;
