@@ -7,6 +7,10 @@ const scraper = require('./scraper');
 const app  = express();
 const PORT = process.env.PORT || 5678;
 
+// Self-URL — used to rewrite HLS segment URLs so they go through /hls-proxy.
+// Set BACKEND_URL in your .env / Railway variables, e.g. https://yourapp.railway.app
+const SELF = (process.env.BACKEND_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+
 app.use(cors({
   origin: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
@@ -16,7 +20,7 @@ app.use(express.json());
 // ── ROOT ──────────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '6.1.0', source: 'consumet' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '6.2.0', source: 'consumet' });
 });
 
 // ── HEALTH / SOURCE CHECK ─────────────────────────────────────────────────────
@@ -105,8 +109,9 @@ app.get('/episode_url', async (req, res) => {
 });
 
 // ── PLAY PROXY ────────────────────────────────────────────────────────────────
-// Streams ALL video (HLS and MP4) through the backend with the correct headers.
-// This prevents GogoAnime CDN from blocking browser-direct requests (CORS/Referer).
+// Streams ALL video through the backend with correct headers (fixes Referer/CORS).
+// For HLS content: buffers the manifest and rewrites every segment/sub-playlist URL
+// to go through /hls-proxy — the browser never touches the GogoAnime CDN directly.
 
 const VIDEO_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
@@ -142,20 +147,44 @@ app.get('/play', async (req, res) => {
         });
 
         if (videoResp.status >= 200 && videoResp.status < 400) {
-          // Detect content type: HLS manifests vs video
-          const isHlsManifest = link.is_hls || link.url.includes('.m3u8');
-          res.setHeader('Content-Type', isHlsManifest
-            ? 'application/vnd.apple.mpegurl'
-            : (videoResp.headers['content-type'] || 'video/mp4'));
-          res.setHeader('Accept-Ranges', 'bytes');
+          const isHlsManifest = link.is_hls || link.url.includes('.m3u8')
+            || (videoResp.headers['content-type'] || '').includes('mpegurl');
+
           res.setHeader('Content-Disposition', download === '1'
             ? `attachment; filename="ep${ep_no}.mp4"`
             : 'inline');
-          if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
-          if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
-          res.status(videoResp.status);
-          videoResp.data.pipe(res);
-          res.on('close', () => videoResp.data.destroy());
+
+          if (isHlsManifest) {
+            // ── HLS path: buffer manifest, rewrite all absolute URLs through /hls-proxy ──
+            // This prevents the browser from ever hitting the GogoAnime CDN directly,
+            // which would fail with a CORS error on every .ts segment.
+            let manifest = '';
+            videoResp.data.setEncoding('utf8');
+            videoResp.data.on('data', chunk => { manifest += chunk; });
+            videoResp.data.on('end', () => {
+              // Every line that starts with http(s):// is a segment or sub-playlist URL.
+              const rewritten = manifest.replace(
+                /^(https?:\/\/.+)$/gm,
+                (m) => `${SELF}/hls-proxy?url=${encodeURIComponent(m.trim())}`
+              );
+              const body = Buffer.from(rewritten, 'utf8');
+              res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+              res.setHeader('Content-Length', body.length);
+              res.status(200).send(body);
+            });
+            videoResp.data.on('error', () => {
+              if (!res.headersSent) res.status(502).json({ error: 'Manifest read error' });
+            });
+          } else {
+            // ── MP4 / direct video path: pipe bytes straight through ──────────────────
+            res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
+            res.setHeader('Accept-Ranges', 'bytes');
+            if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
+            if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
+            res.status(videoResp.status);
+            videoResp.data.pipe(res);
+            res.on('close', () => videoResp.data.destroy());
+          }
           return;
         }
         videoResp.data.destroy();
@@ -175,8 +204,8 @@ app.get('/play', async (req, res) => {
 });
 
 // ── HLS SEGMENT PROXY ─────────────────────────────────────────────────────────
-// HLS.js fetches individual .ts segments and sub-manifests from the browser.
-// We proxy those too so the Referer header is always set correctly.
+// Hls.js fetches .ts segments and sub-manifests after parsing the rewritten manifest.
+// Every one of those URLs now points here, so the Referer is always correct.
 
 app.get('/hls-proxy', async (req, res) => {
   const { url } = req.query;
@@ -256,6 +285,7 @@ app.post('/thumbnails', async (req, res) => {
 // ── START ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend v6.1 running on port ${PORT}`);
+  console.log(`✅ AnimeVault backend v6.2 running on port ${PORT}`);
+  console.log(`   Self URL (for HLS rewriting): ${SELF}`);
   console.log(`   Consumet API: ${process.env.CONSUMET_API || 'https://api.consumet.org'}`);
 });
