@@ -1,9 +1,13 @@
 /**
- * AnimeVault Scraper v7.0 — AllAnime Edition (title-aware)
+ * AnimeVault Scraper v7.1 — AllAnime Edition (title-aware + progressive fallback)
  *
  * Uses AllAnime (allanime.day) directly — no Consumet dependency.
  * Accepts both AllAnime internal IDs AND plain titles as show_id,
  * so the new frontend (which passes titles) works out of the box.
+ *
+ * v7.1 change: resolveShowId() now tries progressively cleaner/shorter
+ * versions of the title when the full query returns 0 results, fixing
+ * shows like "Re:ZERO -Starting Life in Another World- Season 4".
  */
 
 const axios = require('axios');
@@ -11,7 +15,7 @@ const crypto = require('crypto');
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 
-const AGENT       = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
+const AGENT         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
 const ALLANIME_REFR = 'https://allmanga.to';
 const ALLANIME_BASE = 'allanime.day';
 const ALLANIME_API  = `https://api.${ALLANIME_BASE}`;
@@ -99,6 +103,63 @@ function titleScore(a, b) {
   return Math.round(overlap / Math.max(wa.size, wb.length) * 65);
 }
 
+// ── PROGRESSIVE TITLE FALLBACKS ───────────────────────────────────────────────
+//
+// Given a raw title like "Re:ZERO -Starting Life in Another World- Season 4",
+// produce a list of progressively simpler queries to try until one gets hits:
+//
+//   1. Original title (as-is)
+//   2. Strip trailing season/part/cour/arc suffixes  → "Re:ZERO -Starting Life in Another World-"
+//   3. Strip decorative dashes / sub-titles          → "Re:ZERO"
+//   4. Replace special chars with spaces, collapse   → "ReZERO Starting Life in Another World"
+//   5. First 4 significant words                     → "ReZERO Starting Life Another"
+//   6. Everything before the first colon or dash     → "ReZERO"
+
+function titleFallbacks(raw) {
+  if (!raw) return [];
+  const seen = new Set();
+  const add = (s) => {
+    const t = (s || '').trim();
+    if (t && !seen.has(t)) { seen.add(t); results.push(t); }
+  };
+  const results = [];
+
+  // 1. Original
+  add(raw);
+
+  // 2. Strip trailing season/part/cour/arc/OVA/Special suffixes (case-insensitive)
+  const noSuffix = raw.replace(/\s*[\-–:]?\s*(season|part|cour|arc|ova|special|movie|film|chapter)\s*\d*\s*$/i, '').trim();
+  add(noSuffix);
+
+  // 3. Strip content inside or after decorative dashes like " -Subtitle Here-"
+  //    e.g. "Re:ZERO -Starting Life in Another World-" → "Re:ZERO"
+  const noDashSub = raw
+    .replace(/\s+[-–]\s+[^-–]+[-–]?\s*$/i, '')   // trailing " - Subtitle -"
+    .replace(/\s+[-–][^-–]+[-–]\s*$/i, '')         // trailing " -Subtitle-"
+    .trim();
+  add(noDashSub);
+
+  // Also try stripping the season suffix from the dash-stripped version
+  add(noDashSub.replace(/\s*(season|part|cour|arc)\s*\d*\s*$/i, '').trim());
+
+  // 4. Replace all special chars with spaces
+  const cleaned = raw
+    .replace(/[:\-–!?'"]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  add(cleaned);
+
+  // 5. First 4 significant words of the cleaned version
+  const words = cleaned.split(' ').filter(w => w.length > 1);
+  if (words.length > 4) add(words.slice(0, 4).join(' '));
+
+  // 6. Everything before the first colon or long dash in the original
+  const beforeColon = raw.split(/[:\-–]/)[0].trim();
+  add(beforeColon);
+
+  return results;
+}
+
 // ── ID RESOLUTION CACHE ───────────────────────────────────────────────────────
 
 const _idCache = new Map();
@@ -107,31 +168,49 @@ const _idCache = new Map();
  * Accepts either:
  *  - A real AllAnime ID  (alphanumeric, no spaces)  → used directly
  *  - A title string                                  → searched on AllAnime
+ *    If the full title returns no results, progressively simpler queries
+ *    are tried until one succeeds or all are exhausted.
  */
 async function resolveShowId(showId, title = null) {
   const cacheKey = title ? `${showId}::${title}` : showId;
   if (_idCache.has(cacheKey)) return _idCache.get(cacheKey);
 
-  // Looks like a proper AllAnime internal ID
+  // Looks like a proper AllAnime internal ID — use directly
   const looksLikeId = /^[a-zA-Z0-9]{8,30}$/.test(showId) && !showId.includes(' ');
   if (looksLikeId) {
     _idCache.set(cacheKey, showId);
     return showId;
   }
 
-  // It's a title — search AllAnime
-  const query = title || showId;
-  const results = await searchAnime(query);
-  if (!results.length) return null;
+  // Build the list of queries to try in order
+  const primaryQuery = title || showId;
+  const queries = titleFallbacks(primaryQuery);
 
-  // Score each result against query and title
+  // If we also have a separate title arg, include its fallbacks too (deduplicated)
+  if (title && title !== showId) {
+    for (const fb of titleFallbacks(showId)) {
+      if (!queries.includes(fb)) queries.push(fb);
+    }
+  }
+
   let best = null, bestScore = -1;
-  for (const r of results) {
-    const s = Math.max(
-      titleScore(r.title || '', query),
-      titleScore(r.title || '', title || ''),
-    );
-    if (s > bestScore) { bestScore = s; best = r; }
+
+  for (const query of queries) {
+    const results = await searchAnime(query);
+    if (!results.length) continue;
+
+    // Score each result against BOTH the original showId and the passed title
+    for (const r of results) {
+      const s = Math.max(
+        titleScore(r.title || '', showId),
+        titleScore(r.title || '', title || ''),
+        titleScore(r.title || '', query),
+      );
+      if (s > bestScore) { bestScore = s; best = r; }
+    }
+
+    // Good enough match found — stop trying fallbacks
+    if (bestScore >= 75) break;
   }
 
   if (!best || bestScore < 25) return null;
