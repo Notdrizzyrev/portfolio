@@ -16,11 +16,10 @@ app.use(express.json());
 // ── ROOT ──────────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '6.0.0', source: 'consumet' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '6.1.0', source: 'consumet' });
 });
 
 // ── HEALTH / SOURCE CHECK ─────────────────────────────────────────────────────
-// Replaces /test-domain — checks whether the Consumet API is reachable.
 
 app.get('/test-domain', async (req, res) => {
   const CONSUMET = (process.env.CONSUMET_API || 'https://api.consumet.org').replace(/\/$/, '');
@@ -101,13 +100,19 @@ app.get('/episode_url', async (req, res) => {
       all_links:   links
     });
   } catch (e) {
-    // Consumet doesn't have CAPTCHA but keep the 503 shape just in case
-    res.status(e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
 // ── PLAY PROXY ────────────────────────────────────────────────────────────────
-// Streams MP4 through the backend to avoid browser CORS restrictions.
+// Streams ALL video (HLS and MP4) through the backend with the correct headers.
+// This prevents GogoAnime CDN from blocking browser-direct requests (CORS/Referer).
+
+const VIDEO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Referer':    'https://gogoanime.cl/',
+  'Origin':     'https://gogoanime.cl',
+};
 
 app.get('/play', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: rawMode, download, title } = req.query;
@@ -118,38 +123,34 @@ app.get('/play', async (req, res) => {
     const links = await scraper.getAllEpisodeLinks(show_id, ep_no, mode, quality, title || null);
     if (!links || links.length === 0) return res.status(404).json({ error: 'Not found' });
 
-    const primaryUrl = links[0].url;
-    if (primaryUrl.includes('.m3u8')) {
-      return res.redirect(primaryUrl);
-    }
-
-    const videoHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-      'Referer':    'https://gogoanime.cl/',
-      'Origin':     'https://gogoanime.cl',
-    };
-    if (req.headers['range']) videoHeaders['Range'] = req.headers['range'];
+    res.setHeader('Access-Control-Allow-Origin',   req.headers['origin'] || '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+    res.setHeader('Cross-Origin-Resource-Policy',  'cross-origin');
 
     let lastError = null;
+
     for (const link of links) {
-      if (link.url.includes('.m3u8') || link.is_hls) {
-        return res.redirect(link.url);
-      }
+      const reqHeaders = { ...VIDEO_HEADERS };
+      if (req.headers['range']) reqHeaders['Range'] = req.headers['range'];
+
       try {
         const videoResp = await axios.get(link.url, {
-          headers:      videoHeaders,
+          headers:      reqHeaders,
           responseType: 'stream',
-          timeout:      15000,
+          timeout:      20000,
           maxRedirects: 5,
         });
 
         if (videoResp.status >= 200 && videoResp.status < 400) {
-          res.setHeader('Access-Control-Allow-Origin',    req.headers['origin'] || '*');
-          res.setHeader('Access-Control-Expose-Headers',  'Content-Length, Content-Range, Accept-Ranges');
-          res.setHeader('Cross-Origin-Resource-Policy',   'cross-origin');
-          res.setHeader('Content-Type',  videoResp.headers['content-type'] || 'video/mp4');
+          // Detect content type: HLS manifests vs video
+          const isHlsManifest = link.is_hls || link.url.includes('.m3u8');
+          res.setHeader('Content-Type', isHlsManifest
+            ? 'application/vnd.apple.mpegurl'
+            : (videoResp.headers['content-type'] || 'video/mp4'));
           res.setHeader('Accept-Ranges', 'bytes');
-          res.setHeader('Content-Disposition', download === '1' ? `attachment; filename="ep${ep_no}.mp4"` : 'inline');
+          res.setHeader('Content-Disposition', download === '1'
+            ? `attachment; filename="ep${ep_no}.mp4"`
+            : 'inline');
           if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
           if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
           res.status(videoResp.status);
@@ -170,6 +171,33 @@ app.get('/play', async (req, res) => {
 
   } catch (e) {
     if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// ── HLS SEGMENT PROXY ─────────────────────────────────────────────────────────
+// HLS.js fetches individual .ts segments and sub-manifests from the browser.
+// We proxy those too so the Referer header is always set correctly.
+
+app.get('/hls-proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+
+  try {
+    const decoded = decodeURIComponent(url);
+    const segResp = await axios.get(decoded, {
+      headers:      VIDEO_HEADERS,
+      responseType: 'stream',
+      timeout:      15000,
+      maxRedirects: 3,
+    });
+
+    res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
+    res.setHeader('Content-Type', segResp.headers['content-type'] || 'video/mp2t');
+    segResp.data.pipe(res);
+    res.on('close', () => segResp.data.destroy());
+  } catch (e) {
+    console.warn('[HLS-proxy] Failed:', e.message);
+    if (!res.headersSent) res.status(502).json({ error: e.message });
   }
 });
 
@@ -228,6 +256,6 @@ app.post('/thumbnails', async (req, res) => {
 // ── START ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend v6.0 (Consumet) running on port ${PORT}`);
+  console.log(`✅ AnimeVault backend v6.1 running on port ${PORT}`);
   console.log(`   Consumet API: ${process.env.CONSUMET_API || 'https://api.consumet.org'}`);
 });
