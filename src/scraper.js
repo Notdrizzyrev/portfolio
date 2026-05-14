@@ -1,340 +1,576 @@
-/**
- * AnimeVault Scraper v6.1 — Consumet Edition (hardened)
- *
- * Changes from v6.0:
- *  - Retry logic on all Consumet HTTP calls (3 attempts, exponential backoff)
- *  - Provider fallback: gogoanime → zoro, tried for both search AND episode fetch
- *  - Better title normalisation for fuzzy matching
- *  - HLS manifest rewriting: segment URLs are rewritten to go through /hls-proxy
- *    so the browser never hits GogoAnime CDN directly (fixes CORS on segments)
- *  - Cache TTL: episode list cached for 5 min, id cache for session
- */
-
 const axios = require('axios');
+const crypto = require('crypto');
 
-// ── CONFIG ────────────────────────────────────────────────────────────────────
+const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
+const ALLANIME_REFR = "https://allmanga.to";
+const ALLANIME_BASE = "allanime.day";
+const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
+const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 
-const CONSUMET_BASE = (process.env.CONSUMET_API || 'https://api.consumet.org').replace(/\/$/, '');
-const BACKEND_BASE  = (process.env.BACKEND_URL  || 'http://localhost:5678').replace(/\/$/, '');
+// Persisted query hash for episode embeds (from ani-cli v4.14.0)
+const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
 
-const PROVIDERS = ['gogoanime', 'zoro'];
-
-const AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
-
-const http = axios.create({
-  baseURL: CONSUMET_BASE,
-  headers: { 'User-Agent': AGENT },
-  timeout: 15000,
+const axiosInstance = axios.create({
+    headers: {
+        'User-Agent': AGENT,
+        'Referer': ALLANIME_REFR
+    },
+    timeout: 5000
 });
 
-// ── RETRY HELPER ──────────────────────────────────────────────────────────────
-
-async function withRetry(fn, attempts = 3, baseDelay = 800) {
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try { return await fn(); }
-    catch (e) {
-      lastErr = e;
-      if (i < attempts - 1) await sleep(baseDelay * (i + 1));
-    }
-  }
-  throw lastErr;
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ── TITLE HELPERS ─────────────────────────────────────────────────────────────
-
-function normStr(s) {
-  return (s || '').toLowerCase()
-    .replace(/[:\u2013\u2014]/g, ' ')
-    .replace(/[^a-z0-9\s]/g, '')
-    .replace(/\s+/g, ' ').trim();
-}
-
-function titleScore(a, b) {
-  const na = normStr(a), nb = normStr(b);
-  if (!na || !nb) return 0;
-  if (na === nb) return 100;
-  if (na.replace(/\s/g,'') === nb.replace(/\s/g,'')) return 95;
-  if (na.includes(nb) || nb.includes(na)) return 82;
-  const wa = new Set(na.split(' ').filter(w => w.length > 1));
-  const wb =         nb.split(' ').filter(w => w.length > 1);
-  const overlap = wb.filter(w => wa.has(w)).length;
-  if (!overlap) return 0;
-  return Math.round(overlap / Math.max(wa.size, wb.length) * 65);
-}
-
-function pickBest(results, targetTitle, threshold = 35) {
-  if (!results || !results.length) return null;
-  let best = null, bestScore = -1;
-  for (const r of results) {
-    const s = Math.max(
-      titleScore(r.title || '', targetTitle),
-      titleScore(r.romaji || '', targetTitle),
-      titleScore(r.englishTitle || '', targetTitle),
-    );
-    if (s > bestScore) { bestScore = s; best = r; }
-  }
-  return bestScore >= threshold ? best : null;
-}
-
-// ── ID CACHE ──────────────────────────────────────────────────────────────────
-
-const _idCache = new Map();
-
-async function resolveId(showId, title = null) {
-  if (_idCache.has(showId)) return _idCache.get(showId);
-
-  // Namespaced id from a previous search: "gogoanime::naruto"
-  if (typeof showId === 'string' && showId.includes('::')) {
-    const sep = showId.indexOf('::');
-    const provider = showId.slice(0, sep);
-    const id = showId.slice(sep + 2);
-    if (provider && id) {
-      const resolved = { provider, id, title: title || id };
-      _idCache.set(showId, resolved);
-      return resolved;
-    }
-  }
-
-  const query = title || (isNaN(showId) ? String(showId) : null);
-  if (!query) return null;
-
-  const resolved = await searchBestMatch(query);
-  if (resolved) {
-    _idCache.set(showId, resolved);
-    if (title) _idCache.set(title, resolved);
-  }
-  return resolved || null;
-}
-
-async function searchBestMatch(query) {
-  for (const provider of PROVIDERS) {
+function decrypt(blob) {
     try {
-      const res = await withRetry(() =>
-        http.get(`/anime/${provider}/${encodeURIComponent(query)}`), 3);
-      const results = res.data?.results || res.data?.data || [];
-      if (!results.length) continue;
-      const best = pickBest(results, query, 30);
-      if (best) return { provider, id: best.id, title: best.title };
+        const data = Buffer.from(blob, 'base64');
+        // v4.13+: skip 1st byte (version), IV = next 12 bytes, last 16 bytes = auth tag, middle = ciphertext
+        const iv = data.slice(1, 13);
+        const ctLen = data.length - 13 - 16;
+        const ciphertext = data.slice(13, 13 + ctLen);
+        const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
+
+        const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(ALLANIME_KEY, 'hex'), ctr);
+        let decrypted = decipher.update(ciphertext);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        return decrypted.toString('utf8');
     } catch (e) {
-      console.warn(`[searchBestMatch] ${provider} failed for "${query}":`, e.message);
+        return null;
     }
-  }
-  return null;
 }
 
-// ── EPISODE CACHE (5-min TTL) ─────────────────────────────────────────────────
-
-const _epsCache  = new Map(); // key → { episodes, ts }
-const EPS_TTL_MS = 5 * 60 * 1000;
-
-async function fetchEpisodes(provider, animeId) {
-  const key = `${provider}:${animeId}`;
-  const cached = _epsCache.get(key);
-  if (cached && Date.now() - cached.ts < EPS_TTL_MS) return cached.episodes;
-
-  let episodes = [];
-  try {
-    const res = await withRetry(() =>
-      http.get(`/anime/${provider}/info`, { params: { id: animeId } }), 3);
-    episodes = res.data?.episodes || [];
-  } catch (e) {
-    console.error(`[fetchEpisodes] ${provider}/${animeId}:`, e.message);
-  }
-
-  if (episodes.length) _epsCache.set(key, { episodes, ts: Date.now() });
-  return episodes;
+// Filemoon provider decryption (v4.14.0)
+// Decodes base64url to hex
+function b64urlToHex(b64url) {
+    // Add padding
+    let padded = b64url;
+    const mod = padded.length % 4;
+    if (mod === 2) padded += '==';
+    else if (mod === 3) padded += '=';
+    // Convert base64url to standard base64
+    const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+    return Buffer.from(b64, 'base64').toString('hex');
 }
 
-// ── STREAM SOURCES ────────────────────────────────────────────────────────────
+async function getFilemoonLinks(providerPath) {
+    const allLinks = [];
+    const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
-async function fetchSources(provider, episodeId) {
-  try {
-    const res = await withRetry(() =>
-      http.get(`/anime/${provider}/watch`, { params: { episodeId } }), 3);
-    const raw = res.data?.sources || [];
-
-    const sources = raw.map(s => ({
-      url:     s.url,
-      quality: s.quality || (s.url?.includes('.m3u8') ? 'hls' : 'unknown'),
-      isM3U8:  s.url?.includes('.m3u8') || s.isM3U8 || false,
-    }));
-
-    // Prefer non-HLS (MP4) first so the /play proxy can stream bytes directly.
-    // If only HLS is available that's fine — /play pipes the manifest too.
-    sources.sort((a, b) => {
-      const aHls = a.isM3U8 ? 1 : 0;
-      const bHls = b.isM3U8 ? 1 : 0;
-      if (aHls !== bHls) return aHls - bHls;
-      return (parseInt(b.quality) || 0) - (parseInt(a.quality) || 0);
-    });
-
-    return sources;
-  } catch (e) {
-    console.error(`[fetchSources] ${provider}/${episodeId}:`, e.message);
-    return [];
-  }
-}
-
-// ── PUBLIC API ────────────────────────────────────────────────────────────────
-
-async function searchAnime(query, allowAdult = false) {
-  const results = [];
-  for (const provider of PROVIDERS) {
     try {
-      const res = await withRetry(() =>
-        http.get(`/anime/${provider}/${encodeURIComponent(query)}`), 3);
-      const raw = res.data?.results || res.data?.data || [];
-      for (const r of raw) {
-        results.push({
-          id:           `${provider}::${r.id}`,
-          title:        r.title || r.id || '',
-          episodes_sub: r.totalEpisodes || r.episodes || 0,
-          episodes_dub: 0,
+        const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
+        const fmData = response.data;
+
+        if (fmData && fmData.iv && fmData.payload && fmData.key_parts) {
+            const kp1 = fmData.key_parts[0];
+            const kp2 = fmData.key_parts[1];
+            const keyHex = b64urlToHex(kp1) + b64urlToHex(kp2);
+            const ivHex = b64urlToHex(fmData.iv) + '00000002';
+
+            // Decode payload from base64url
+            let payloadB64 = fmData.payload;
+            const pMod = payloadB64.length % 4;
+            if (pMod === 2) payloadB64 += '==';
+            else if (pMod === 3) payloadB64 += '=';
+            payloadB64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+            const payloadBuf = Buffer.from(payloadB64, 'base64');
+
+            // Strip last 16 bytes (auth tag)
+            const ctLen = payloadBuf.length - 16;
+            const ciphertext = payloadBuf.slice(0, ctLen);
+
+            const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(keyHex, 'hex'), Buffer.from(ivHex, 'hex'));
+            let decrypted = decipher.update(ciphertext);
+            decrypted = Buffer.concat([decrypted, decipher.final()]);
+            const plain = decrypted.toString('utf8');
+
+            // Parse the decrypted JSON for video URLs
+            const parts = plain.replace(/[{}\[\]]/g, '\n').split('\n');
+            for (const part of parts) {
+                // Match "url":"..." and "height":NNN in either order
+                const m1 = part.match(/"url":"([^"]*)".*"height":(\d+)/);
+                const m2 = part.match(/"height":(\d+).*"url":"([^"]*)"/);
+                if (m1) {
+                    let url = m1[1].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=');
+                    allLinks.push({ resolution: m1[2], url });
+                } else if (m2) {
+                    let url = m2[2].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=');
+                    allLinks.push({ resolution: m2[1], url });
+                }
+            }
+        }
+    } catch (e) {
+        // Filemoon provider fetch failed
+    }
+
+    return allLinks;
+}
+
+// Custom hex decoding from anime.sh (provider_init)
+const decodeMapping = {
+    '79': 'A', '7a': 'B', '7b': 'C', '7c': 'D', '7d': 'E', '7e': 'F', '7f': 'G', '70': 'H', '71': 'I', '72': 'J', '73': 'K', '74': 'L', '75': 'M', '76': 'N', '77': 'O',
+    '68': 'P', '69': 'Q', '6a': 'R', '6b': 'S', '6c': 'T', '6d': 'U', '6e': 'V', '6f': 'W', '60': 'X', '61': 'Y', '62': 'Z',
+    '59': 'a', '5a': 'b', '5b': 'c', '5c': 'd', '5d': 'e', '5e': 'f', '5f': 'g', '50': 'h', '51': 'i', '52': 'j', '53': 'k', '54': 'l', '55': 'm', '56': 'n', '57': 'o',
+    '48': 'p', '49': 'q', '4a': 'r', '4b': 's', '4c': 't', '4d': 'u', '4e': 'v', '4f': 'w', '40': 'x', '41': 'y', '42': 'z',
+    '08': '0', '09': '1', '0a': '2', '0b': '3', '0c': '4', '0d': '5', '0e': '6', '0f': '7', '00': '8', '01': '9',
+    '15': '-', '16': '.', '67': '_', '46': '~', '02': ':', '17': '/', '07': '?', '1b': '#', '63': '[', '65': ']', '78': '@', '19': '!', '1c': '$', '1e': '&', '10': '(', '11': ')', '12': '*', '13': '+', '14': ',', '03': ';', '05': '=', '1d': '%'
+};
+
+function decodeProviderId(hex) {
+    let result = '';
+    for (let i = 0; i < hex.length; i += 2) {
+        const part = hex.substring(i, i + 2);
+        result += decodeMapping[part] || '';
+    }
+    return result.replace('/clock', '/clock.json');
+}
+
+// Mirrors get_links() from anime.sh
+async function getLinks(providerPath) {
+    let allLinks = [];
+
+    // If path contains tools.fast4speed.rsvp, output it directly (direct mp4 link)
+    if (providerPath.includes('tools.fast4speed.rsvp')) {
+        allLinks.push({ resolution: 'Yt', url: providerPath });
+        return allLinks;
+    }
+
+    // For non-direct URLs, fetch the provider JSON
+    const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
+
+    try {
+        const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
+        const providerData = response.data;
+
+        if (providerData.links && Array.isArray(providerData.links)) {
+            for (const link of providerData.links) {
+                const url = link.link;
+                const res = link.resolutionStr || 'unknown';
+
+                if (url && url.includes('repackager.wixmp.com')) {
+                    // wixmp repackager: extract individual quality URLs (anime.sh lines 35-40)
+                    const cleaned = url.replace('repackager.wixmp.com/', '').replace(/\.urlset.*/, '');
+                    const qualitiesMatch = url.match(/\/,([^/]*),\/mp4/);
+                    if (qualitiesMatch) {
+                        const qualities = qualitiesMatch[1].split(',');
+                        for (const q of qualities) {
+                            const qUrl = cleaned.replace(/,[^/]*/, q);
+                            allLinks.push({ resolution: q, url: qUrl });
+                        }
+                    } else {
+                        allLinks.push({ resolution: res, url });
+                    }
+                } else if (url) {
+                    allLinks.push({ resolution: res, url });
+                }
+            }
+        }
+
+        if (providerData.hls && providerData.hls.url) {
+            allLinks.push({ resolution: 'hls', url: providerData.hls.url });
+        }
+    } catch (e) {
+        // Provider fetch failed — timed out or returned error
+    }
+
+    return allLinks;
+}
+
+async function searchAnime(query, nsfw = false) {
+    const searchGql = `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
+        shows( search: $search limit: $limit page: $page countryOrigin: $countryOrigin ) {
+            edges {
+                _id
+                name
+                englishName
+                nativeName
+                availableEpisodes
+                __typename
+            }
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: {
+                search: {
+                    allowAdult: nsfw ? true : false,
+                    allowUnknown: false,
+                    query: query
+                },
+                limit: 40,
+                page: 1,
+                countryOrigin: "ALL"
+            },
+            query: searchGql
         });
-        _idCache.set(`${provider}::${r.id}`, { provider, id: r.id, title: r.title });
-      }
-      break;
+
+        const shows = response.data.data.shows.edges;
+        return shows.map(show => ({
+            id: show._id,
+            title: show.englishName || show.name.replace(/\\"/g, '"'),
+            episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
+            episodes_dub: parseInt(show.availableEpisodes.dub) || 0
+        }));
     } catch (e) {
-      console.warn(`[searchAnime] ${provider}:`, e.message);
+        return [];
     }
-  }
-  return results;
 }
 
 async function getAnimeDetails(showId) {
-  const resolved = await resolveId(showId);
-  if (!resolved) return null;
-  const { provider, id } = resolved;
-  try {
-    const res = await withRetry(() =>
-      http.get(`/anime/${provider}/info`, { params: { id } }), 3);
-    const d = res.data;
-    if (!d) return null;
-    const episodes = d.episodes || [];
-    const dubEps = episodes.filter(e => e.isDub || e.hasDub).length;
-    return {
-      id:            `${provider}::${id}`,
-      name:          d.title || id,
-      title:         d.title || id,
-      title_english: d.englishTitle || d.title || id,
-      thumbnail_url: d.image || d.cover || null,
-      synopsis:      d.description || '',
-      status:        d.status || '',
-      episodes_sub:  episodes.filter(e => !e.isDub).length || episodes.length,
-      episodes_dub:  dubEps,
-      has_dub:       dubEps > 0,
-    };
-  } catch (e) {
-    console.error('[getAnimeDetails]', e.message);
-    return null;
-  }
+    const query = `query ($showId: String!) {
+        show( _id: $showId ) {
+            _id
+            name
+            englishName
+            nativeName
+            thumbnail
+            description
+            status
+            availableEpisodesDetail
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId },
+            query: query
+        });
+
+        const show = response.data.data.show;
+        if (!show) return null;
+
+        return {
+            id: show._id,
+            title: show.englishName || show.name,
+            title_english: show.englishName || show.name,
+            thumbnail_url: show.thumbnail,
+            synopsis: show.description ? show.description.replace(/<[^>]*>?/gm, '') : '',
+            status: show.status,
+            episodes_sub: show.availableEpisodesDetail.sub ? show.availableEpisodesDetail.sub.length : 0,
+            episodes_dub: show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0
+        };
+    } catch (e) {
+        return null;
+    }
 }
 
 async function getEpisodesList(showId, mode = 'sub') {
-  const resolved = await resolveId(showId);
-  if (!resolved) return [];
-  const { provider, id } = resolved;
-  const episodes = await fetchEpisodes(provider, id);
-  return episodes
-    .filter(e => mode === 'dub' ? (e.isDub || e.hasDub) : true)
-    .map(e => String(e.number || e.id))
-    .sort((a, b) => parseFloat(a) - parseFloat(b));
+    const episodesListGql = `query ($showId: String!) {
+        show( _id: $showId ) {
+            _id
+            availableEpisodesDetail
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId },
+            query: episodesListGql
+        });
+
+        const details = response.data.data.show.availableEpisodesDetail;
+        const episodes = details[mode] || [];
+        return episodes.sort((a, b) => parseFloat(a) - parseFloat(b));
+    } catch (e) {
+        return [];
+    }
 }
 
-async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', title = null) {
-  const effectiveTitle = title || (isNaN(showId) ? String(showId) : null);
+// Parse tobeparsed/sourceUrls from API response into respLines
+function parseSourceLines(apiData) {
+    const rawJson = JSON.stringify(apiData);
+    const hasTobeparsed = rawJson.includes('"tobeparsed"');
+    let respLines = [];
 
-  if (effectiveTitle && !_idCache.has(showId)) {
-    const presolved = await searchBestMatch(effectiveTitle);
-    if (presolved) {
-      _idCache.set(showId, presolved);
-      _idCache.set(effectiveTitle, presolved);
+    if (hasTobeparsed) {
+        // Extract the tobeparsed blob from wherever it lives in the response
+        const data = apiData.data;
+        const blob = apiData.tobeparsed ||
+            (data && data.tobeparsed) ||
+            (data && data.episode && data.episode.tobeparsed) ||
+            null;
+
+        let blobValue = blob;
+        if (!blobValue) {
+            // Fallback: regex extraction from raw JSON
+            const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
+            if (tbpMatch) blobValue = tbpMatch[1];
+        }
+
+        if (blobValue) {
+            const plain = decrypt(blobValue);
+            if (plain) {
+                const parts = plain.replace(/[{}]/g, '\n').split('\n');
+                for (const part of parts) {
+                    const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+                    if (m) {
+                        respLines.push({ sourceName: m[2], hex: m[1] });
+                    }
+                }
+            } else {
+                console.error("Decryption of tobeparsed blob failed — key may need updating");
+            }
+        }
+    } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
+        // Fallback: unencrypted sourceUrls
+        const raw = JSON.stringify(apiData.data.episode.sourceUrls);
+        const cleaned = raw.replace(/\\u002F/g, '/').replace(/\\/g, '');
+        const parts = cleaned.replace(/[{}]/g, '\n').split('\n');
+        for (const part of parts) {
+            const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+            if (m) {
+                respLines.push({ sourceName: m[2], hex: m[1] });
+            }
+        }
     }
-  }
 
-  const resolved = await resolveId(showId, effectiveTitle);
-  if (!resolved) return [];
-
-  const { provider, id } = resolved;
-  const episodes = await fetchEpisodes(provider, id);
-  if (!episodes.length) return [];
-
-  const targetNo = parseFloat(epNo);
-  let ep = episodes.find(e => parseFloat(e.number) === targetNo);
-  if (!ep) {
-    ep = episodes.reduce((closest, e) => {
-      const diff = Math.abs(parseFloat(e.number) - targetNo);
-      const closestDiff = Math.abs(parseFloat(closest?.number || 0) - targetNo);
-      return diff < closestDiff ? e : closest;
-    }, episodes[0]);
-  }
-  if (!ep) return [];
-
-  const sources = await fetchSources(provider, ep.id);
-  if (!sources.length) return [];
-
-  let sorted = [...sources];
-  if (quality === 'worst') {
-    sorted.reverse();
-  } else if (quality !== 'best') {
-    const preferred = sorted.find(s => String(s.quality).includes(quality));
-    if (preferred) {
-      sorted = [preferred, ...sorted.filter(s => s !== preferred)];
-    } else {
-      const req = parseInt(quality) || 9999;
-      const atOrBelow = sorted.filter(s => !s.isM3U8 && parseInt(s.quality) <= req);
-      if (atOrBelow.length) sorted = [atOrBelow[0], ...sorted.filter(s => s !== atOrBelow[0])];
-    }
-  }
-
-  return sorted.map(s => ({
-    url:        s.url,
-    resolution: String(s.quality),
-    is_hls:     s.isM3U8,
-  }));
+    return respLines;
 }
 
 async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
-  const links = await getAllEpisodeLinks(showId, epNo, mode, quality);
-  return links.length ? links[0].url : null;
+    const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+        episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
+            episodeString
+            sourceUrls
+        }
+    }`;
+
+    try {
+        let apiData = null;
+
+        // v4.14.0: Try persisted query GET request first (bypasses captcha)
+        try {
+            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+
+            const getResp = await axios.get(apiUrl, {
+                headers: {
+                    'User-Agent': AGENT,
+                    'Referer': ALLANIME_REFR,
+                    'Origin': 'https://youtu-chan.com'
+                },
+                timeout: 5000
+            });
+
+            const rawText = JSON.stringify(getResp.data);
+            if (rawText && rawText.includes('tobeparsed')) {
+                apiData = getResp.data;
+            }
+        } catch (e) {
+            // GET request failed, will fall back to POST
+        }
+
+        // Fallback: POST request (original method)
+        if (!apiData) {
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: {
+                    showId: showId,
+                    translationType: mode,
+                    episodeString: epNo
+                },
+                query: episodeEmbedGql
+            });
+            apiData = postResp.data;
+        }
+
+        // Check for NEED_CAPTCHA or other API-level errors
+        if (apiData.errors && apiData.errors.length > 0) {
+            const captchaErr = apiData.errors.find(e => e.message === 'NEED_CAPTCHA');
+            if (captchaErr) {
+                throw new Error('NEED_CAPTCHA: AllAnime API is currently requiring captcha verification. This is an upstream issue affecting all clients.');
+            }
+            throw new Error(`AllAnime API error: ${apiData.errors.map(e => e.message).join(', ')}`);
+        }
+
+        // Parse source lines from the API response
+        let respLines = parseSourceLines(apiData);
+
+        if (respLines.length === 0) return null;
+
+        // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4 (filemoon, new in v4.14.0)
+        const providerDefs = [
+            { name: 'Default', filemoon: false },
+            { name: 'Yt-mp4', filemoon: false },
+            { name: 'S-mp4', filemoon: false },
+            { name: 'Luf-Mp4', filemoon: false },
+            { name: 'Fm-mp4', filemoon: true }
+        ];
+
+        // Fetch all providers in parallel
+        const linkPromises = providerDefs.map(async (prov) => {
+            const entry = respLines.find(r => r.sourceName === prov.name);
+            if (!entry) return [];
+            const decodedPath = decodeProviderId(entry.hex);
+            if (!decodedPath) return [];
+
+            if (prov.filemoon) {
+                return getFilemoonLinks(decodedPath);
+            } else {
+                return getLinks(decodedPath);
+            }
+        });
+
+        const results = await Promise.all(linkPromises);
+        let allLinks = results.flat();
+
+        if (allLinks.length === 0) return null;
+
+        // Sort numerically descending (best first)
+        allLinks.sort((a, b) => {
+            const resA = parseInt(a.resolution) || 0;
+            const resB = parseInt(b.resolution) || 0;
+            return resB - resA;
+        });
+        // Debug: Log all available links and selection
+        console.log(`[Quality] Requested: ${quality} | Available:`, allLinks.map(l => `${l.resolution} → ${l.url.substring(0, 60)}...`));
+
+        let selected;
+        if (quality === 'best') {
+            selected = allLinks[0];
+        } else if (quality === 'worst') {
+            const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
+            selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[allLinks.length - 1];
+        } else {
+            const requestedRes = parseInt(quality) || 9999;
+            // Try exact match first
+            selected = allLinks.find(l => l.resolution.includes(quality));
+            if (!selected) {
+                // Find closest resolution at or below requested quality
+                const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
+                const atOrBelow = numeric.filter(l => parseInt(l.resolution) <= requestedRes);
+                if (atOrBelow.length > 0) {
+                    selected = atOrBelow[0];
+                } else {
+                    selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[0];
+                }
+            }
+        }
+
+        console.log(`[Quality] Selected: ${selected.resolution} → ${selected.url.substring(0, 80)}...`);
+
+        // Clean up double slashes in URL path (but not in https://)
+        let finalUrl = selected.url.replace(/([^:])\/\//g, '$1/');
+        return finalUrl;
+
+    } catch (e) {
+        console.error("Failed to get episode URL:", e.message);
+        // Re-throw NEED_CAPTCHA so callers can handle it appropriately
+        if (e.message && e.message.startsWith('NEED_CAPTCHA')) {
+            throw e;
+        }
+        return null;
+    }
 }
 
 async function getEpisodeInfo(showId, epNo) {
-  const resolved = await resolveId(showId);
-  if (!resolved) return null;
-  const { provider, id } = resolved;
-  const episodes = await fetchEpisodes(provider, id);
-  const targetNo = parseFloat(epNo);
-  const ep = episodes.find(e => parseFloat(e.number) === targetNo);
-  if (!ep) return null;
-  return {
-    episode_no:  ep.number || epNo,
-    title:       ep.title || ep.description || '',
-    description: ep.description || '',
-    thumbnails:  ep.image ? [ep.image] : [],
-  };
+    const epNum = parseFloat(epNo);
+    const query = `query ($showId: String!, $epNum: Float!) {
+        episodeInfos( showId: $showId episodeNumStart: $epNum episodeNumEnd: $epNum ) {
+            episodeIdNum
+            notes
+            description
+            thumbnails
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId, epNum },
+            query: query
+        });
+
+        const infos = response.data.data.episodeInfos;
+        if (!infos || infos.length === 0) return null;
+
+        const info = infos[0];
+
+        // Format thumbnails (some are relative paths)
+        let thumbnails = info.thumbnails || [];
+        thumbnails = thumbnails.map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
+
+        return {
+            episode_no: info.episodeIdNum,
+            title: info.notes || '',
+            description: info.description || '',
+            thumbnails: thumbnails
+        };
+    } catch (e) {
+        return null;
+    }
 }
 
 async function getAvailableQualities(showId, epNo, mode = 'sub') {
-  const links = await getAllEpisodeLinks(showId, epNo, mode, 'best');
-  return [...new Set(links.map(l => l.resolution))];
+    try {
+        let apiData = null;
+
+        try {
+            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+
+            const getResp = await axios.get(apiUrl, {
+                headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+                timeout: 5000
+            });
+            const rawText = JSON.stringify(getResp.data);
+            if (rawText && rawText.includes('tobeparsed')) apiData = getResp.data;
+        } catch (e) { /* fallback to POST */ }
+
+        if (!apiData) {
+            const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+                episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
+            }`;
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: { showId, translationType: mode, episodeString: epNo },
+                query: episodeEmbedGql
+            });
+            apiData = postResp.data;
+        }
+
+        if (apiData.errors && apiData.errors.length > 0) return [];
+
+        let respLines = parseSourceLines(apiData);
+        if (respLines.length === 0) return [];
+
+        const providerDefs = [
+            { name: 'Default', filemoon: false },
+            { name: 'Yt-mp4', filemoon: false },
+            { name: 'S-mp4', filemoon: false },
+            { name: 'Luf-Mp4', filemoon: false },
+            { name: 'Fm-mp4', filemoon: true }
+        ];
+
+        const linkPromises = providerDefs.map(async (prov) => {
+            const entry = respLines.find(r => r.sourceName === prov.name);
+            if (!entry) return [];
+            const decodedPath = decodeProviderId(entry.hex);
+            if (!decodedPath) return [];
+            if (prov.filemoon) return getFilemoonLinks(decodedPath);
+            return getLinks(decodedPath);
+        });
+
+        const results = await Promise.all(linkPromises);
+        let allLinks = results.flat();
+        if (allLinks.length === 0) return [];
+
+        // Extract unique resolutions
+        const resolutions = [...new Set(allLinks.map(l => l.resolution))];
+        return resolutions;
+    } catch (e) {
+        return [];
+    }
 }
 
+// Alias for debug endpoint in index.js
 async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best') {
-  const url = await getEpisodeUrl(showId, epNo, mode, quality);
-  return { url, debug: { showId, epNo, mode, quality } };
+    const url = await getEpisodeUrl(showId, epNo, mode, quality);
+    return { url, debug: {} };
 }
 
 module.exports = {
-  searchAnime,
-  getAnimeDetails,
-  getEpisodesList,
-  getEpisodeUrl,
-  getEpisodeUrlDebug,
-  getEpisodeInfo,
-  getAvailableQualities,
-  getAllEpisodeLinks,
+    searchAnime,
+    getAnimeDetails,
+    getEpisodesList,
+    getEpisodeUrl,
+    getEpisodeUrlDebug,
+    getEpisodeInfo,
+    getAvailableQualities
 };
