@@ -7,18 +7,37 @@ const scraper = require('./scraper');
 const app  = express();
 const PORT = process.env.PORT || 5678;
 
+// Self-URL — used to rewrite HLS segment URLs so they go through /hls-proxy.
+// Set BACKEND_URL in your .env / Railway variables, e.g. https://yourapp.railway.app
+const SELF = (process.env.BACKEND_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+
 app.use(cors({
   origin: true,
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
 }));
 app.use(express.json());
 
-// ── Health check ─────────────────────────────────────────────────────────────
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.0.0' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '6.2.0', source: 'consumet' });
 });
 
-// ── Search anime by title ─────────────────────────────────────────────────────
+// ── HEALTH / SOURCE CHECK ─────────────────────────────────────────────────────
+
+app.get('/test-domain', async (req, res) => {
+  const CONSUMET = (process.env.CONSUMET_API || 'https://api.consumet.org').replace(/\/$/, '');
+  try {
+    const r = await axios.get(`${CONSUMET}/anime/gogoanime/naruto`, { timeout: 8000 });
+    const works = !!(r.data?.results?.length > 0);
+    res.json({ working: works ? CONSUMET : 'none found', results: { [CONSUMET]: { status: r.status, works } } });
+  } catch (e) {
+    res.json({ working: 'none found', results: { [CONSUMET]: { error: e.message } } });
+  }
+});
+
+// ── SEARCH ────────────────────────────────────────────────────────────────────
+
 app.get('/search', async (req, res) => {
   const query = req.query.query || '';
   const allowAdult = req.query.nsfw === 'true' || req.query.adult === 'true';
@@ -30,7 +49,8 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// ── Get anime details by AllAnime ID ─────────────────────────────────────────
+// ── ANIME DETAILS ─────────────────────────────────────────────────────────────
+
 app.get('/anime/:id', async (req, res) => {
   try {
     const details = await scraper.getAnimeDetails(req.params.id);
@@ -41,23 +61,23 @@ app.get('/anime/:id', async (req, res) => {
   }
 });
 
-// ── Dub availability check ────────────────────────────────────────────────────
+// ── DUB CHECK ─────────────────────────────────────────────────────────────────
+
 app.get('/dub-check', async (req, res) => {
   const { show_id } = req.query;
   if (!show_id) return res.status(400).json({ error: 'Missing show_id' });
   try {
     const details = await scraper.getAnimeDetails(show_id);
     if (!details) return res.json({ has_dub: false });
-    // episodes_dub > 0 means dubbed episodes exist on AllAnime
-    const hasDub = (details.episodes_dub != null && details.episodes_dub > 0)
-                || (details.has_dub === true);
+    const hasDub = (details.episodes_dub != null && details.episodes_dub > 0) || (details.has_dub === true);
     res.json({ has_dub: hasDub, episodes_dub: details.episodes_dub || 0 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── Episode list (sub or dub) ─────────────────────────────────────────────────
+// ── EPISODES LIST ─────────────────────────────────────────────────────────────
+
 app.get('/episodes/:id', async (req, res) => {
   const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
   try {
@@ -67,58 +87,146 @@ app.get('/episodes/:id', async (req, res) => {
   }
 });
 
-// ── Episode stream URL (JSON) ─────────────────────────────────────────────────
+// ── EPISODE URL ───────────────────────────────────────────────────────────────
+
 app.get('/episode_url', async (req, res) => {
-  const { show_id, ep_no, quality = 'best', mode: rawMode } = req.query;
+  const { show_id, ep_no, quality = 'best', mode: rawMode, title } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
   if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
   try {
-    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
-    if (!url) return res.status(404).json({ error: 'Not found' });
-    res.json({ episode_url: url, mode, quality });
+    const links = await scraper.getAllEpisodeLinks(show_id, ep_no, mode, quality, title || null);
+    if (!links || links.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({
+      episode_url: links[0].url,
+      is_hls:      links[0].url.includes('.m3u8') || links[0].is_hls,
+      mode,
+      quality:     links[0].resolution,
+      all_links:   links
+    });
   } catch (e) {
-    res.status(e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ── Stream / proxy video directly ────────────────────────────────────────────
+// ── PLAY PROXY ────────────────────────────────────────────────────────────────
+// Streams ALL video through the backend with correct headers (fixes Referer/CORS).
+// For HLS content: buffers the manifest and rewrites every segment/sub-playlist URL
+// to go through /hls-proxy — the browser never touches the GogoAnime CDN directly.
+
+const VIDEO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Referer':    'https://gogoanime.cl/',
+  'Origin':     'https://gogoanime.cl',
+};
+
 app.get('/play', async (req, res) => {
-  const { show_id, ep_no, quality = 'best', mode: rawMode, download } = req.query;
+  const { show_id, ep_no, quality = 'best', mode: rawMode, download, title } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
   if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+
   try {
-    const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
-    if (!url) return res.status(404).json({ error: 'Not found' });
+    const links = await scraper.getAllEpisodeLinks(show_id, ep_no, mode, quality, title || null);
+    if (!links || links.length === 0) return res.status(404).json({ error: 'Not found' });
 
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-      'Referer':  'https://allmanga.to',
-      'Origin':   'https://allmanga.to',
-    };
-    if (req.headers['range']) headers['Range'] = req.headers['range'];
-
-    const videoResp = await axios.get(url, {
-      headers,
-      responseType: 'stream',
-      timeout: 20000,
-      maxRedirects: 5,
-    });
-
-    res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
+    res.setHeader('Access-Control-Allow-Origin',   req.headers['origin'] || '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Disposition', download === '1' ? `attachment; filename="ep${ep_no}.mp4"` : 'inline');
-    if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
-    if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
+    res.setHeader('Cross-Origin-Resource-Policy',  'cross-origin');
 
-    res.status(videoResp.status);
-    videoResp.data.pipe(res);
-    res.on('close', () => videoResp.data.destroy());
+    let lastError = null;
+
+    for (const link of links) {
+      const reqHeaders = { ...VIDEO_HEADERS };
+      if (req.headers['range']) reqHeaders['Range'] = req.headers['range'];
+
+      try {
+        const videoResp = await axios.get(link.url, {
+          headers:      reqHeaders,
+          responseType: 'stream',
+          timeout:      20000,
+          maxRedirects: 5,
+        });
+
+        if (videoResp.status >= 200 && videoResp.status < 400) {
+          const isHlsManifest = link.is_hls || link.url.includes('.m3u8')
+            || (videoResp.headers['content-type'] || '').includes('mpegurl');
+
+          res.setHeader('Content-Disposition', download === '1'
+            ? `attachment; filename="ep${ep_no}.mp4"`
+            : 'inline');
+
+          if (isHlsManifest) {
+            // ── HLS path: buffer manifest, rewrite all absolute URLs through /hls-proxy ──
+            // This prevents the browser from ever hitting the GogoAnime CDN directly,
+            // which would fail with a CORS error on every .ts segment.
+            let manifest = '';
+            videoResp.data.setEncoding('utf8');
+            videoResp.data.on('data', chunk => { manifest += chunk; });
+            videoResp.data.on('end', () => {
+              // Every line that starts with http(s):// is a segment or sub-playlist URL.
+              const rewritten = manifest.replace(
+                /^(https?:\/\/.+)$/gm,
+                (m) => `${SELF}/hls-proxy?url=${encodeURIComponent(m.trim())}`
+              );
+              const body = Buffer.from(rewritten, 'utf8');
+              res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+              res.setHeader('Content-Length', body.length);
+              res.status(200).send(body);
+            });
+            videoResp.data.on('error', () => {
+              if (!res.headersSent) res.status(502).json({ error: 'Manifest read error' });
+            });
+          } else {
+            // ── MP4 / direct video path: pipe bytes straight through ──────────────────
+            res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
+            res.setHeader('Accept-Ranges', 'bytes');
+            if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
+            if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
+            res.status(videoResp.status);
+            videoResp.data.pipe(res);
+            res.on('close', () => videoResp.data.destroy());
+          }
+          return;
+        }
+        videoResp.data.destroy();
+      } catch (e) {
+        lastError = e;
+        console.warn(`[Play] Link failed (${link.resolution}): ${e.message}`);
+      }
+    }
+
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'All stream sources failed', detail: lastError?.message });
+    }
 
   } catch (e) {
     if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// ── HLS SEGMENT PROXY ─────────────────────────────────────────────────────────
+// Hls.js fetches .ts segments and sub-manifests after parsing the rewritten manifest.
+// Every one of those URLs now points here, so the Referer is always correct.
+
+app.get('/hls-proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+
+  try {
+    const decoded = decodeURIComponent(url);
+    const segResp = await axios.get(decoded, {
+      headers:      VIDEO_HEADERS,
+      responseType: 'stream',
+      timeout:      15000,
+      maxRedirects: 3,
+    });
+
+    res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
+    res.setHeader('Content-Type', segResp.headers['content-type'] || 'video/mp2t');
+    segResp.data.pipe(res);
+    res.on('close', () => segResp.data.destroy());
+  } catch (e) {
+    console.warn('[HLS-proxy] Failed:', e.message);
+    if (!res.headersSent) res.status(502).json({ error: e.message });
   }
 });
 
@@ -130,7 +238,8 @@ app.options('/play', (req, res) => {
   res.sendStatus(204);
 });
 
-// ── Available qualities for an episode ───────────────────────────────────────
+// ── QUALITIES ─────────────────────────────────────────────────────────────────
+
 app.get('/qualities', async (req, res) => {
   const { show_id, ep_no, mode: rawMode } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
@@ -142,7 +251,8 @@ app.get('/qualities', async (req, res) => {
   }
 });
 
-// ── Episode metadata (thumbnail, title, etc.) ─────────────────────────────────
+// ── EPISODE INFO ──────────────────────────────────────────────────────────────
+
 app.get('/episode_info', async (req, res) => {
   const { show_id, ep_no } = req.query;
   if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
@@ -155,7 +265,8 @@ app.get('/episode_info', async (req, res) => {
   }
 });
 
-// ── Batch thumbnail lookup by AllAnime IDs ────────────────────────────────────
+// ── THUMBNAILS ────────────────────────────────────────────────────────────────
+
 app.post('/thumbnails', async (req, res) => {
   const ids = req.body?.ids || req.body?.mal_ids;
   if (!ids || !Array.isArray(ids)) {
@@ -171,7 +282,10 @@ app.post('/thumbnails', async (req, res) => {
   res.json(results);
 });
 
-// ── Start server ──────────────────────────────────────────────────────────────
+// ── START ─────────────────────────────────────────────────────────────────────
+
 app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend running on port ${PORT}`);
+  console.log(`✅ AnimeVault backend v6.2 running on port ${PORT}`);
+  console.log(`   Self URL (for HLS rewriting): ${SELF}`);
+  console.log(`   Consumet API: ${process.env.CONSUMET_API || 'https://api.consumet.org'}`);
 });
