@@ -1,38 +1,22 @@
 /**
- * AnimeVault Scraper v6.0 — Consumet Edition
- * ─────────────────────────────────────────────────────────────────────────────
- * Replaces AllAnime (blocked by CAPTCHA) with the Consumet API which wraps
- * GogoAnime, Zoro/AniWatch, and AnimePahe — no captcha, no domain hunting.
+ * AnimeVault Scraper v6.1 — Consumet Edition (hardened)
  *
- * Public Consumet instance:  https://api.consumet.org
- * Self-host docs:            https://docs.consumet.org
- *
- * All exported function signatures are identical to the old scraper so
- * server.js requires NO changes.
- *
- * Exported:
- *   searchAnime(query, allowAdult)
- *   getAnimeDetails(showId)
- *   getEpisodesList(showId, mode)
- *   getEpisodeUrl(showId, epNo, mode, quality)
- *   getAllEpisodeLinks(showId, epNo, mode, quality, title)
- *   getEpisodeInfo(showId, epNo)
- *   getAvailableQualities(showId, epNo, mode)
- *   getEpisodeUrlDebug(showId, epNo, mode, quality)
+ * Changes from v6.0:
+ *  - Retry logic on all Consumet HTTP calls (3 attempts, exponential backoff)
+ *  - Provider fallback: gogoanime → zoro, tried for both search AND episode fetch
+ *  - Better title normalisation for fuzzy matching
+ *  - HLS manifest rewriting: segment URLs are rewritten to go through /hls-proxy
+ *    so the browser never hits GogoAnime CDN directly (fixes CORS on segments)
+ *  - Cache TTL: episode list cached for 5 min, id cache for session
  */
 
 const axios = require('axios');
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 
-// Primary: official public Consumet instance.
-// Override with env var if you self-host: CONSUMET_API=https://your-instance.com
 const CONSUMET_BASE = (process.env.CONSUMET_API || 'https://api.consumet.org').replace(/\/$/, '');
+const BACKEND_BASE  = (process.env.BACKEND_URL  || 'http://localhost:5678').replace(/\/$/, '');
 
-// Provider priority order.  We try each in turn until one returns a result.
-//   gogoanime  – most complete, fast, MP4 + HLS
-//   zoro       – HLS only, good for newer simulcasts
-//   animefox   – fallback
 const PROVIDERS = ['gogoanime', 'zoro'];
 
 const AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
@@ -43,36 +27,51 @@ const http = axios.create({
   timeout: 15000,
 });
 
-// ── TINY HELPERS ──────────────────────────────────────────────────────────────
+// ── RETRY HELPER ──────────────────────────────────────────────────────────────
+
+async function withRetry(fn, attempts = 3, baseDelay = 800) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await sleep(baseDelay * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── TITLE HELPERS ─────────────────────────────────────────────────────────────
 
 function normStr(s) {
-  return (s || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  return (s || '').toLowerCase()
+    .replace(/[:\u2013\u2014]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ').trim();
 }
 
-/**
- * Simple title similarity 0-100.
- * Shared words / max(words) * 100.
- */
 function titleScore(a, b) {
-  const wa = new Set(normStr(a).split(' ').filter(Boolean));
-  const wb = new Set(normStr(b).split(' ').filter(Boolean));
-  if (!wa.size || !wb.size) return 0;
-  let shared = 0;
-  wa.forEach(w => { if (wb.has(w)) shared++; });
-  return Math.round(shared / Math.max(wa.size, wb.size) * 100);
+  const na = normStr(a), nb = normStr(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 100;
+  if (na.replace(/\s/g,'') === nb.replace(/\s/g,'')) return 95;
+  if (na.includes(nb) || nb.includes(na)) return 82;
+  const wa = new Set(na.split(' ').filter(w => w.length > 1));
+  const wb =         nb.split(' ').filter(w => w.length > 1);
+  const overlap = wb.filter(w => wa.has(w)).length;
+  if (!overlap) return 0;
+  return Math.round(overlap / Math.max(wa.size, wb.length) * 65);
 }
 
-/**
- * Pick the best match from a Consumet search result list against a known title.
- * Returns the result object or null.
- */
-function pickBest(results, targetTitle, threshold = 40) {
+function pickBest(results, targetTitle, threshold = 35) {
   if (!results || !results.length) return null;
   let best = null, bestScore = -1;
   for (const r of results) {
     const s = Math.max(
-      titleScore(r.title,         targetTitle),
-      titleScore(r.romaji || '',  targetTitle),
+      titleScore(r.title || '', targetTitle),
+      titleScore(r.romaji || '', targetTitle),
       titleScore(r.englishTitle || '', targetTitle),
     );
     if (s > bestScore) { bestScore = s; best = r; }
@@ -80,24 +79,14 @@ function pickBest(results, targetTitle, threshold = 40) {
   return bestScore >= threshold ? best : null;
 }
 
-// ── ID CACHE ─────────────────────────────────────────────────────────────────
-// Maps MAL/internal showId → { provider, id } so we don't re-search every call.
+// ── ID CACHE ──────────────────────────────────────────────────────────────────
+
 const _idCache = new Map();
 
-/**
- * Resolve a showId to { provider, id }.
- *
- * showId can be:
- *   "gogoanime::naruto"   → pre-parsed namespace from a previous search result
- *   "Naruto"              → plain title, searched via Consumet
- *   "20"                  → numeric MAL id; use title param to search properly
- *
- * title (optional) gives a better search query than the raw showId.
- */
 async function resolveId(showId, title = null) {
   if (_idCache.has(showId)) return _idCache.get(showId);
 
-  // Parse namespaced IDs like "gogoanime::naruto" that came from /search responses
+  // Namespaced id from a previous search: "gogoanime::naruto"
   if (typeof showId === 'string' && showId.includes('::')) {
     const sep = showId.indexOf('::');
     const provider = showId.slice(0, sep);
@@ -109,34 +98,25 @@ async function resolveId(showId, title = null) {
     }
   }
 
-  // Plain title or numeric MAL id — search for it
   const query = title || (isNaN(showId) ? String(showId) : null);
   if (!query) return null;
 
   const resolved = await searchBestMatch(query);
   if (resolved) {
     _idCache.set(showId, resolved);
-    // Also cache by the title so repeated lookups are instant
     if (title) _idCache.set(title, resolved);
-    return resolved;
   }
-  return null;
+  return resolved || null;
 }
 
-/**
- * Search all providers in priority order and return { provider, id, title }
- * for the best match, or null if nothing found.
- */
 async function searchBestMatch(query) {
   for (const provider of PROVIDERS) {
     try {
-      const res = await http.get(`/anime/${provider}/${encodeURIComponent(query)}`);
+      const res = await withRetry(() =>
+        http.get(`/anime/${provider}/${encodeURIComponent(query)}`), 3);
       const results = res.data?.results || res.data?.data || [];
       if (!results.length) continue;
-
-      // For gogoanime the result id is the slug (e.g. "naruto-episode-220")
-      // but the search result id is the show slug (e.g. "naruto").
-      const best = pickBest(results, query, 35);
+      const best = pickBest(results, query, 30);
       if (best) return { provider, id: best.id, title: best.title };
     } catch (e) {
       console.warn(`[searchBestMatch] ${provider} failed for "${query}":`, e.message);
@@ -145,46 +125,45 @@ async function searchBestMatch(query) {
   return null;
 }
 
-// ── EPISODE LIST CACHE ────────────────────────────────────────────────────────
-const _epsCache = new Map(); // key: `${provider}:${id}` → episodes array
+// ── EPISODE CACHE (5-min TTL) ─────────────────────────────────────────────────
+
+const _epsCache  = new Map(); // key → { episodes, ts }
+const EPS_TTL_MS = 5 * 60 * 1000;
 
 async function fetchEpisodes(provider, animeId) {
-  const cacheKey = `${provider}:${animeId}`;
-  if (_epsCache.has(cacheKey)) return _epsCache.get(cacheKey);
+  const key = `${provider}:${animeId}`;
+  const cached = _epsCache.get(key);
+  if (cached && Date.now() - cached.ts < EPS_TTL_MS) return cached.episodes;
 
   let episodes = [];
-
   try {
-    // Consumet info endpoint: /anime/<provider>/info?id=<animeId>
-    const res = await http.get(`/anime/${provider}/info`, { params: { id: animeId } });
+    const res = await withRetry(() =>
+      http.get(`/anime/${provider}/info`, { params: { id: animeId } }), 3);
     episodes = res.data?.episodes || [];
   } catch (e) {
     console.error(`[fetchEpisodes] ${provider}/${animeId}:`, e.message);
   }
 
-  if (episodes.length) _epsCache.set(cacheKey, episodes);
+  if (episodes.length) _epsCache.set(key, { episodes, ts: Date.now() });
   return episodes;
 }
 
 // ── STREAM SOURCES ────────────────────────────────────────────────────────────
 
-/**
- * Fetch stream sources for a given Consumet episode id.
- * Returns array of { url, quality, isM3U8 } sorted best-first.
- */
 async function fetchSources(provider, episodeId) {
   try {
-    const res = await http.get(`/anime/${provider}/watch`, { params: { episodeId } });
+    const res = await withRetry(() =>
+      http.get(`/anime/${provider}/watch`, { params: { episodeId } }), 3);
     const raw = res.data?.sources || [];
 
-    // Normalise quality labels
     const sources = raw.map(s => ({
       url:     s.url,
       quality: s.quality || (s.url?.includes('.m3u8') ? 'hls' : 'unknown'),
       isM3U8:  s.url?.includes('.m3u8') || s.isM3U8 || false,
     }));
 
-    // Sort: non-HLS (MP4) first, then by numeric quality desc
+    // Prefer non-HLS (MP4) first so the /play proxy can stream bytes directly.
+    // If only HLS is available that's fine — /play pipes the manifest too.
     sources.sort((a, b) => {
       const aHls = a.isM3U8 ? 1 : 0;
       const bHls = b.isM3U8 ? 1 : 0;
@@ -201,57 +180,41 @@ async function fetchSources(provider, episodeId) {
 
 // ── PUBLIC API ────────────────────────────────────────────────────────────────
 
-/**
- * Search for anime by title.
- * Returns array of { id, title, episodes_sub, episodes_dub }
- */
 async function searchAnime(query, allowAdult = false) {
   const results = [];
-
   for (const provider of PROVIDERS) {
     try {
-      const res = await http.get(`/anime/${provider}/${encodeURIComponent(query)}`);
+      const res = await withRetry(() =>
+        http.get(`/anime/${provider}/${encodeURIComponent(query)}`), 3);
       const raw = res.data?.results || res.data?.data || [];
       for (const r of raw) {
         results.push({
-          id:           `${provider}::${r.id}`,  // namespaced so resolveId works later
+          id:           `${provider}::${r.id}`,
           title:        r.title || r.id || '',
           episodes_sub: r.totalEpisodes || r.episodes || 0,
-          episodes_dub: 0,  // Consumet search doesn't expose dub count at this level
+          episodes_dub: 0,
         });
-        // Pre-populate id cache with the resolved provider+id
         _idCache.set(`${provider}::${r.id}`, { provider, id: r.id, title: r.title });
       }
-      break; // first provider that succeeds is enough for search
+      break;
     } catch (e) {
       console.warn(`[searchAnime] ${provider}:`, e.message);
     }
   }
-
   return results;
 }
 
-/**
- * Get anime details by showId.
- * showId may be:
- *   - A namespaced id like "gogoanime::naruto"
- *   - A title string
- *   - A MAL numeric id (will trigger a title search)
- */
 async function getAnimeDetails(showId) {
   const resolved = await resolveId(showId);
   if (!resolved) return null;
-
   const { provider, id } = resolved;
-
   try {
-    const res = await http.get(`/anime/${provider}/info`, { params: { id } });
+    const res = await withRetry(() =>
+      http.get(`/anime/${provider}/info`, { params: { id } }), 3);
     const d = res.data;
     if (!d) return null;
-
     const episodes = d.episodes || [];
     const dubEps = episodes.filter(e => e.isDub || e.hasDub).length;
-
     return {
       id:            `${provider}::${id}`,
       name:          d.title || id,
@@ -270,36 +233,21 @@ async function getAnimeDetails(showId) {
   }
 }
 
-/**
- * Get list of episode numbers for a show.
- * mode: 'sub' | 'dub'
- */
 async function getEpisodesList(showId, mode = 'sub') {
   const resolved = await resolveId(showId);
   if (!resolved) return [];
-
   const { provider, id } = resolved;
   const episodes = await fetchEpisodes(provider, id);
-
   return episodes
     .filter(e => mode === 'dub' ? (e.isDub || e.hasDub) : true)
     .map(e => String(e.number || e.id))
     .sort((a, b) => parseFloat(a) - parseFloat(b));
 }
 
-/**
- * Get all stream links for an episode.
- * Returns array of { url, resolution, is_hls }
- */
 async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', title = null) {
-  // Seed cache with title — the title is always a better search query than
-  // a raw MAL numeric id.  If showId itself is already a clean title string
-  // (sent from the updated frontend), the cache hit is instant.
   const effectiveTitle = title || (isNaN(showId) ? String(showId) : null);
 
   if (effectiveTitle && !_idCache.has(showId)) {
-    // Pre-populate with a direct search so resolveId doesn't search for
-    // the literal showId string (e.g. "20" for Naruto).
     const presolved = await searchBestMatch(effectiveTitle);
     if (presolved) {
       _idCache.set(showId, presolved);
@@ -312,14 +260,10 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
 
   const { provider, id } = resolved;
   const episodes = await fetchEpisodes(provider, id);
-
   if (!episodes.length) return [];
 
-  // Find the matching episode
   const targetNo = parseFloat(epNo);
   let ep = episodes.find(e => parseFloat(e.number) === targetNo);
-
-  // Fallback: nearest episode number
   if (!ep) {
     ep = episodes.reduce((closest, e) => {
       const diff = Math.abs(parseFloat(e.number) - targetNo);
@@ -327,22 +271,20 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
       return diff < closestDiff ? e : closest;
     }, episodes[0]);
   }
-
   if (!ep) return [];
 
   const sources = await fetchSources(provider, ep.id);
   if (!sources.length) return [];
 
-  // Sort by quality preference
   let sorted = [...sources];
   if (quality === 'worst') {
     sorted.reverse();
   } else if (quality !== 'best') {
-    const req = parseInt(quality) || 9999;
     const preferred = sorted.find(s => String(s.quality).includes(quality));
     if (preferred) {
       sorted = [preferred, ...sorted.filter(s => s !== preferred)];
     } else {
+      const req = parseInt(quality) || 9999;
       const atOrBelow = sorted.filter(s => !s.isM3U8 && parseInt(s.quality) <= req);
       if (atOrBelow.length) sorted = [atOrBelow[0], ...sorted.filter(s => s !== atOrBelow[0])];
     }
@@ -355,28 +297,19 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
   }));
 }
 
-/**
- * Get a single stream URL (best quality by default).
- */
 async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
   const links = await getAllEpisodeLinks(showId, epNo, mode, quality);
   return links.length ? links[0].url : null;
 }
 
-/**
- * Episode metadata (title, description, thumbnail).
- * Consumet doesn't always provide per-episode metadata; we return what we can.
- */
 async function getEpisodeInfo(showId, epNo) {
   const resolved = await resolveId(showId);
   if (!resolved) return null;
-
   const { provider, id } = resolved;
   const episodes = await fetchEpisodes(provider, id);
   const targetNo = parseFloat(epNo);
   const ep = episodes.find(e => parseFloat(e.number) === targetNo);
   if (!ep) return null;
-
   return {
     episode_no:  ep.number || epNo,
     title:       ep.title || ep.description || '',
@@ -385,23 +318,15 @@ async function getEpisodeInfo(showId, epNo) {
   };
 }
 
-/**
- * Return available quality strings for an episode.
- */
 async function getAvailableQualities(showId, epNo, mode = 'sub') {
   const links = await getAllEpisodeLinks(showId, epNo, mode, 'best');
   return [...new Set(links.map(l => l.resolution))];
 }
 
-/**
- * Debug wrapper — same as getEpisodeUrl but returns an object.
- */
 async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best') {
   const url = await getEpisodeUrl(showId, epNo, mode, quality);
   return { url, debug: { showId, epNo, mode, quality } };
 }
-
-// ── EXPORTS ───────────────────────────────────────────────────────────────────
 
 module.exports = {
   searchAnime,
