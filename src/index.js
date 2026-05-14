@@ -14,7 +14,43 @@ app.use(cors({
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.1.0' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.2.0' });
+});
+
+// Tests all known AllAnime domains and reports which one works.
+// Hit /test-domain in your browser to diagnose API issues.
+app.get('/test-domain', async (req, res) => {
+  const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
+  const POSSIBLE_DOMAINS = [
+    'allanime.day', 'allanime.to', 'allmanga.to',
+    'allanime.pro', 'allanime.co', 'allanime.tv', 'allanime.site'
+  ];
+  const testQuery = {
+    variables: { search: { query: 'naruto', allowAdult: false, allowUnknown: false }, limit: 1, page: 1, countryOrigin: 'ALL' },
+    query: `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
+      shows(search: $search limit: $limit page: $page countryOrigin: $countryOrigin) { edges { _id name } }
+    }`
+  };
+  const results = {};
+  for (const domain of POSSIBLE_DOMAINS) {
+    try {
+      const r = await axios.post(`https://api.${domain}/api`, testQuery, {
+        headers: { 'User-Agent': AGENT, 'Referer': `https://${domain}`, 'Origin': `https://${domain}` },
+        timeout: 8000,
+        maxRedirects: 3
+      });
+      const works = !!(r.data?.data?.shows?.edges?.length > 0);
+      results[`api.${domain}`] = { status: r.status, works };
+    } catch (e) {
+      results[`api.${domain}`] = {
+        error: e.message,
+        httpStatus: e.response?.status || null,
+        redirectsTo: e.response?.headers?.location || null
+      };
+    }
+  }
+  const working = Object.entries(results).find(([, v]) => v.works);
+  res.json({ working: working ? working[0] : 'none found', results });
 });
 
 app.get('/search', async (req, res) => {
