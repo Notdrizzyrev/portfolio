@@ -1,539 +1,381 @@
+/**
+ * AnimeVault Scraper v6.0 — Consumet Edition
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Replaces AllAnime (blocked by CAPTCHA) with the Consumet API which wraps
+ * GogoAnime, Zoro/AniWatch, and AnimePahe — no captcha, no domain hunting.
+ *
+ * Public Consumet instance:  https://api.consumet.org
+ * Self-host docs:            https://docs.consumet.org
+ *
+ * All exported function signatures are identical to the old scraper so
+ * server.js requires NO changes.
+ *
+ * Exported:
+ *   searchAnime(query, allowAdult)
+ *   getAnimeDetails(showId)
+ *   getEpisodesList(showId, mode)
+ *   getEpisodeUrl(showId, epNo, mode, quality)
+ *   getAllEpisodeLinks(showId, epNo, mode, quality, title)
+ *   getEpisodeInfo(showId, epNo)
+ *   getAvailableQualities(showId, epNo, mode)
+ *   getEpisodeUrlDebug(showId, epNo, mode, quality)
+ */
+
 const axios = require('axios');
-const crypto = require('crypto');
 
-const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
+// ── CONFIG ────────────────────────────────────────────────────────────────────
 
-// All known AllAnime domains — scraper tests each on startup and locks onto the first working one
-const POSSIBLE_DOMAINS = [
-  'allanime.day', 'allanime.to', 'allmanga.to',
-  'allanime.pro', 'allanime.co', 'allanime.tv', 'allanime.site'
-];
+// Primary: official public Consumet instance.
+// Override with env var if you self-host: CONSUMET_API=https://your-instance.com
+const CONSUMET_BASE = (process.env.CONSUMET_API || 'https://api.consumet.org').replace(/\/$/, '');
 
-let ALLANIME_BASE = process.env.ALLANIME_DOMAIN || 'allanime.day';
-let ALLANIME_API  = `https://api.${ALLANIME_BASE}`;
-let ALLANIME_REFR = `https://${ALLANIME_BASE}`;
-let _domainReady  = false;
-const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
+// Provider priority order.  We try each in turn until one returns a result.
+//   gogoanime  – most complete, fast, MP4 + HLS
+//   zoro       – HLS only, good for newer simulcasts
+//   animefox   – fallback
+const PROVIDERS = ['gogoanime', 'zoro'];
 
-const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
+const AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
 
-const axiosInstance = axios.create({
-  headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR },
-  timeout: 8000,
-  maxRedirects: 5
+const http = axios.create({
+  baseURL: CONSUMET_BASE,
+  headers: { 'User-Agent': AGENT },
+  timeout: 15000,
 });
 
-// Auto-discover working AllAnime domain at startup
-const _DISCOVERY_QUERY = {
-  variables: { search: { query: 'naruto', allowAdult: false, allowUnknown: false }, limit: 1, page: 1, countryOrigin: 'ALL' },
-  query: `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
-    shows(search: $search limit: $limit page: $page countryOrigin: $countryOrigin) { edges { _id name } }
-  }`
-};
+// ── TINY HELPERS ──────────────────────────────────────────────────────────────
 
-(async function discoverDomain() {
-  console.log('[Discovery] Testing AllAnime domains...');
-  for (const domain of POSSIBLE_DOMAINS) {
+function normStr(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Simple title similarity 0-100.
+ * Shared words / max(words) * 100.
+ */
+function titleScore(a, b) {
+  const wa = new Set(normStr(a).split(' ').filter(Boolean));
+  const wb = new Set(normStr(b).split(' ').filter(Boolean));
+  if (!wa.size || !wb.size) return 0;
+  let shared = 0;
+  wa.forEach(w => { if (wb.has(w)) shared++; });
+  return Math.round(shared / Math.max(wa.size, wb.size) * 100);
+}
+
+/**
+ * Pick the best match from a Consumet search result list against a known title.
+ * Returns the result object or null.
+ */
+function pickBest(results, targetTitle, threshold = 40) {
+  if (!results || !results.length) return null;
+  let best = null, bestScore = -1;
+  for (const r of results) {
+    const s = Math.max(
+      titleScore(r.title,         targetTitle),
+      titleScore(r.romaji || '',  targetTitle),
+      titleScore(r.englishTitle || '', targetTitle),
+    );
+    if (s > bestScore) { bestScore = s; best = r; }
+  }
+  return bestScore >= threshold ? best : null;
+}
+
+// ── ID CACHE ─────────────────────────────────────────────────────────────────
+// Maps MAL/internal showId → { provider, id } so we don't re-search every call.
+const _idCache = new Map();
+
+/**
+ * Resolve an AnimeVault showId (which may be a MAL id, a title string, or
+ * already a Consumet provider id) to a { provider, id } pair.
+ *
+ * Strategy:
+ *  1. If it's already cached, return cache hit.
+ *  2. Try searchAnimeOnProvider() with the raw id as a query (catches numeric
+ *     MAL ids if the title isn't known).
+ *  3. Caller can also pass `title` to seed the search — used by getAllEpisodeLinks.
+ */
+async function resolveId(showId, title = null) {
+  if (_idCache.has(showId)) return _idCache.get(showId);
+
+  const query = title || String(showId);
+  const resolved = await searchBestMatch(query);
+  if (resolved) {
+    _idCache.set(showId, resolved);
+    return resolved;
+  }
+  return null;
+}
+
+/**
+ * Search all providers in priority order and return { provider, id, title }
+ * for the best match, or null if nothing found.
+ */
+async function searchBestMatch(query) {
+  for (const provider of PROVIDERS) {
     try {
-      const res = await axios.post(`https://api.${domain}/api`, _DISCOVERY_QUERY, {
-        headers: { 'User-Agent': AGENT, 'Referer': `https://${domain}`, 'Origin': `https://${domain}` },
-        timeout: 8000,
-        maxRedirects: 3
-      });
-      if (res.data?.data?.shows?.edges?.length > 0) {
-        ALLANIME_BASE = domain;
-        ALLANIME_API  = `https://api.${domain}`;
-        ALLANIME_REFR = `https://${domain}`;
-        axiosInstance.defaults.headers['Referer'] = ALLANIME_REFR;
-        _domainReady = true;
-        console.log(`✅ [Discovery] Working domain locked: api.${domain}`);
-        return;
-      } else {
-        console.log(`[Discovery] api.${domain} — responded but no data`);
-      }
+      const res = await http.get(`/anime/${provider}/${encodeURIComponent(query)}`);
+      const results = res.data?.results || res.data?.data || [];
+      if (!results.length) continue;
+
+      // For gogoanime the result id is the slug (e.g. "naruto-episode-220")
+      // but the search result id is the show slug (e.g. "naruto").
+      const best = pickBest(results, query, 35);
+      if (best) return { provider, id: best.id, title: best.title };
     } catch (e) {
-      const status = e.response?.status;
-      const location = e.response?.headers?.location || '';
-      console.log(`[Discovery] api.${domain} — ${status ? `HTTP ${status} → ${location}` : e.message}`);
+      console.warn(`[searchBestMatch] ${provider} failed for "${query}":`, e.message);
     }
   }
-  console.error('[Discovery] ❌ No working AllAnime domain found. Streams will not work until one is available.');
-})();
+  return null;
+}
 
-function decrypt(blob) {
+// ── EPISODE LIST CACHE ────────────────────────────────────────────────────────
+const _epsCache = new Map(); // key: `${provider}:${id}` → episodes array
+
+async function fetchEpisodes(provider, animeId) {
+  const cacheKey = `${provider}:${animeId}`;
+  if (_epsCache.has(cacheKey)) return _epsCache.get(cacheKey);
+
+  let episodes = [];
+
   try {
-    const data = Buffer.from(blob, 'base64');
-    const iv = data.slice(1, 13);
-    const ctLen = data.length - 13 - 16;
-    const ciphertext = data.slice(13, 13 + ctLen);
-    const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
-    const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(ALLANIME_KEY, 'hex'), ctr);
-    let decrypted = decipher.update(ciphertext);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    return decrypted.toString('utf8');
+    // Consumet info endpoint: /anime/<provider>/info?id=<animeId>
+    const res = await http.get(`/anime/${provider}/info`, { params: { id: animeId } });
+    episodes = res.data?.episodes || [];
   } catch (e) {
-    return null;
+    console.error(`[fetchEpisodes] ${provider}/${animeId}:`, e.message);
   }
+
+  if (episodes.length) _epsCache.set(cacheKey, episodes);
+  return episodes;
 }
 
-function b64urlToHex(b64url) {
-  let padded = b64url;
-  const mod = padded.length % 4;
-  if (mod === 2) padded += '==';
-  else if (mod === 3) padded += '=';
-  const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
-  return Buffer.from(b64, 'base64').toString('hex');
-}
+// ── STREAM SOURCES ────────────────────────────────────────────────────────────
 
-async function getFilemoonLinks(providerPath) {
-  const allLinks = [];
-  const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
-
+/**
+ * Fetch stream sources for a given Consumet episode id.
+ * Returns array of { url, quality, isM3U8 } sorted best-first.
+ */
+async function fetchSources(provider, episodeId) {
   try {
-    const response = await axiosInstance.get(fetchUrl, { timeout: 3000 });
-    const fmData = response.data;
+    const res = await http.get(`/anime/${provider}/watch`, { params: { episodeId } });
+    const raw = res.data?.sources || [];
 
-    if (fmData && fmData.iv && fmData.payload && fmData.key_parts) {
-      const kp1 = fmData.key_parts[0];
-      const kp2 = fmData.key_parts[1];
-      const keyHex = b64urlToHex(kp1) + b64urlToHex(kp2);
-      const ivHex = b64urlToHex(fmData.iv) + '00000002';
-
-      let payloadB64 = fmData.payload;
-      const pMod = payloadB64.length % 4;
-      if (pMod === 2) payloadB64 += '==';
-      else if (pMod === 3) payloadB64 += '=';
-      payloadB64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
-      const payloadBuf = Buffer.from(payloadB64, 'base64');
-
-      const ctLen = payloadBuf.length - 16;
-      const ciphertext = payloadBuf.slice(0, ctLen);
-
-      const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(keyHex, 'hex'), Buffer.from(ivHex, 'hex'));
-      let decrypted = decipher.update(ciphertext);
-      decrypted = Buffer.concat([decrypted, decipher.final()]);
-      const plain = decrypted.toString('utf8');
-
-      const parts = plain.replace(/[{}\[\]]/g, '\n').split('\n');
-      for (const part of parts) {
-        const m1 = part.match(/"url":"([^"]*)".*"height":(\d+)/);
-        const m2 = part.match(/"height":(\d+).*"url":"([^"]*)"/);
-        if (m1) {
-          allLinks.push({ resolution: m1[2], url: m1[1].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=') });
-        } else if (m2) {
-          allLinks.push({ resolution: m2[1], url: m2[2].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=') });
-        }
-      }
-    }
-  } catch (e) {
-    console.error('[getFilemoonLinks] Error:', e.message);
-  }
-
-  return allLinks;
-}
-
-const decodeMapping = {
-  '79': 'A', '7a': 'B', '7b': 'C', '7c': 'D', '7d': 'E', '7e': 'F', '7f': 'G', '70': 'H', '71': 'I', '72': 'J', '73': 'K', '74': 'L', '75': 'M', '76': 'N', '77': 'O',
-  '68': 'P', '69': 'Q', '6a': 'R', '6b': 'S', '6c': 'T', '6d': 'U', '6e': 'V', '6f': 'W', '60': 'X', '61': 'Y', '62': 'Z',
-  '59': 'a', '5a': 'b', '5b': 'c', '5c': 'd', '5d': 'e', '5e': 'f', '5f': 'g', '50': 'h', '51': 'i', '52': 'j', '53': 'k', '54': 'l', '55': 'm', '56': 'n', '57': 'o',
-  '48': 'p', '49': 'q', '4a': 'r', '4b': 's', '4c': 't', '4d': 'u', '4e': 'v', '4f': 'w', '40': 'x', '41': 'y', '42': 'z',
-  '08': '0', '09': '1', '0a': '2', '0b': '3', '0c': '4', '0d': '5', '0e': '6', '0f': '7', '00': '8', '01': '9',
-  '15': '-', '16': '.', '67': '_', '46': '~', '02': ':', '17': '/', '07': '?', '1b': '#', '63': '[', '65': ']', '78': '@', '19': '!', '1c': '$', '1e': '&', '10': '(', '11': ')', '12': '*', '13': '+', '14': ',', '03': ';', '05': '=', '1d': '%'
-};
-
-function decodeProviderId(hex) {
-  let result = '';
-  for (let i = 0; i < hex.length; i += 2) {
-    const part = hex.substring(i, i + 2);
-    result += decodeMapping[part] || '';
-  }
-  return result.replace('/clock', '/clock.json');
-}
-
-async function getLinks(providerPath) {
-  let allLinks = [];
-
-  if (providerPath.includes('tools.fast4speed.rsvp')) {
-    allLinks.push({ resolution: 'Yt', url: providerPath });
-    return allLinks;
-  }
-
-  const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
-
-  try {
-    const response = await axiosInstance.get(fetchUrl, { timeout: 3000 });
-    const providerData = response.data;
-
-    if (providerData.links && Array.isArray(providerData.links)) {
-      for (const link of providerData.links) {
-        const url = link.link;
-        const res = link.resolutionStr || 'unknown';
-
-        if (url && url.includes('repackager.wixmp.com')) {
-          const cleaned = url.replace('repackager.wixmp.com/', '').replace(/\.urlset.*/, '');
-          const qualitiesMatch = url.match(/\/,([^/]*),\/mp4/);
-          if (qualitiesMatch) {
-            const qualities = qualitiesMatch[1].split(',');
-            for (const q of qualities) {
-              const qUrl = cleaned.replace(/,[^/]*/, q);
-              allLinks.push({ resolution: q, url: qUrl });
-            }
-          } else {
-            allLinks.push({ resolution: res, url });
-          }
-        } else if (url) {
-          allLinks.push({ resolution: res, url });
-        }
-      }
-    }
-
-    if (providerData.hls && providerData.hls.url) {
-      allLinks.push({ resolution: 'hls', url: providerData.hls.url });
-    }
-  } catch (e) {
-    console.error('[getLinks] Provider fetch failed:', e.message);
-  }
-
-  return allLinks;
-}
-
-async function searchAnime(query, allowAdult = false) {
-  const searchGql = `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
-    shows( search: $search limit: $limit page: $page countryOrigin: $countryOrigin ) {
-      edges {
-        _id name englishName nativeName availableEpisodes __typename
-      }
-    }
-  }`;
-
-  try {
-    const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: {
-        search: { allowAdult, allowUnknown: false, query },
-        limit: 40,
-        page: 1,
-        countryOrigin: "ALL"
-      },
-      query: searchGql
-    });
-
-    const shows = response.data.data.shows.edges;
-    return shows.map(show => ({
-      id: show._id,
-      title: show.englishName || show.name.replace(/\\"/g, '"'),
-      episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
-      episodes_dub: parseInt(show.availableEpisodes.dub) || 0
+    // Normalise quality labels
+    const sources = raw.map(s => ({
+      url:     s.url,
+      quality: s.quality || (s.url?.includes('.m3u8') ? 'hls' : 'unknown'),
+      isM3U8:  s.url?.includes('.m3u8') || s.isM3U8 || false,
     }));
+
+    // Sort: non-HLS (MP4) first, then by numeric quality desc
+    sources.sort((a, b) => {
+      const aHls = a.isM3U8 ? 1 : 0;
+      const bHls = b.isM3U8 ? 1 : 0;
+      if (aHls !== bHls) return aHls - bHls;
+      return (parseInt(b.quality) || 0) - (parseInt(a.quality) || 0);
+    });
+
+    return sources;
   } catch (e) {
-    console.error('[searchAnime] Error:', e.message);
+    console.error(`[fetchSources] ${provider}/${episodeId}:`, e.message);
     return [];
   }
 }
 
+// ── PUBLIC API ────────────────────────────────────────────────────────────────
+
+/**
+ * Search for anime by title.
+ * Returns array of { id, title, episodes_sub, episodes_dub }
+ */
+async function searchAnime(query, allowAdult = false) {
+  const results = [];
+
+  for (const provider of PROVIDERS) {
+    try {
+      const res = await http.get(`/anime/${provider}/${encodeURIComponent(query)}`);
+      const raw = res.data?.results || res.data?.data || [];
+      for (const r of raw) {
+        results.push({
+          id:           `${provider}::${r.id}`,  // namespaced so resolveId works later
+          title:        r.title || r.id || '',
+          episodes_sub: r.totalEpisodes || r.episodes || 0,
+          episodes_dub: 0,  // Consumet search doesn't expose dub count at this level
+        });
+        // Pre-populate id cache with the resolved provider+id
+        _idCache.set(`${provider}::${r.id}`, { provider, id: r.id, title: r.title });
+      }
+      break; // first provider that succeeds is enough for search
+    } catch (e) {
+      console.warn(`[searchAnime] ${provider}:`, e.message);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Get anime details by showId.
+ * showId may be:
+ *   - A namespaced id like "gogoanime::naruto"
+ *   - A title string
+ *   - A MAL numeric id (will trigger a title search)
+ */
 async function getAnimeDetails(showId) {
-  const query = `query ($showId: String!) {
-    show( _id: $showId ) {
-      _id name englishName nativeName thumbnail description status availableEpisodesDetail
-    }
-  }`;
+  const resolved = await resolveId(showId);
+  if (!resolved) return null;
+
+  const { provider, id } = resolved;
 
   try {
-    const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: { showId },
-      query
-    });
+    const res = await http.get(`/anime/${provider}/info`, { params: { id } });
+    const d = res.data;
+    if (!d) return null;
 
-    const show = response.data.data.show;
-    if (!show) return null;
+    const episodes = d.episodes || [];
+    const dubEps = episodes.filter(e => e.isDub || e.hasDub).length;
 
-    const epsDub = show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0;
     return {
-      id: show._id,
-      name: show.name,
-      title: show.englishName || show.name,
-      title_english: show.englishName || show.name,
-      thumbnail_url: show.thumbnail ? (show.thumbnail.startsWith('http') ? show.thumbnail : `https://${ALLANIME_BASE}${show.thumbnail}`) : null,
-      synopsis: show.description ? show.description.replace(/<[^>]*>?/gm, '') : '',
-      status: show.status,
-      episodes_sub: show.availableEpisodesDetail.sub ? show.availableEpisodesDetail.sub.length : 0,
-      episodes_dub: epsDub,
-      has_dub: epsDub > 0
+      id:            `${provider}::${id}`,
+      name:          d.title || id,
+      title:         d.title || id,
+      title_english: d.englishTitle || d.title || id,
+      thumbnail_url: d.image || d.cover || null,
+      synopsis:      d.description || '',
+      status:        d.status || '',
+      episodes_sub:  episodes.filter(e => !e.isDub).length || episodes.length,
+      episodes_dub:  dubEps,
+      has_dub:       dubEps > 0,
     };
   } catch (e) {
-    console.error('[getAnimeDetails] Error:', e.message);
+    console.error('[getAnimeDetails]', e.message);
     return null;
   }
 }
 
+/**
+ * Get list of episode numbers for a show.
+ * mode: 'sub' | 'dub'
+ */
 async function getEpisodesList(showId, mode = 'sub') {
-  const episodesListGql = `query ($showId: String!) {
-    show( _id: $showId ) { _id availableEpisodesDetail }
-  }`;
+  const resolved = await resolveId(showId);
+  if (!resolved) return [];
 
-  try {
-    const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: { showId },
-      query: episodesListGql
-    });
+  const { provider, id } = resolved;
+  const episodes = await fetchEpisodes(provider, id);
 
-    const details = response.data.data.show.availableEpisodesDetail;
-    const episodes = details[mode] || [];
-    return episodes.sort((a, b) => parseFloat(a) - parseFloat(b));
-  } catch (e) {
-    console.error('[getEpisodesList] Error:', e.message);
-    return [];
-  }
+  return episodes
+    .filter(e => mode === 'dub' ? (e.isDub || e.hasDub) : true)
+    .map(e => String(e.number || e.id))
+    .sort((a, b) => parseFloat(a) - parseFloat(b));
 }
 
-function parseSourceLines(apiData) {
-  const rawJson = JSON.stringify(apiData);
-  const hasTobeparsed = rawJson.includes('"tobeparsed"');
-  let respLines = [];
-
-  if (hasTobeparsed) {
-    const data = apiData.data;
-    const blob = apiData.tobeparsed ||
-      (data && data.tobeparsed) ||
-      (data && data.episode && data.episode.tobeparsed) ||
-      null;
-
-    let blobValue = blob;
-    if (!blobValue) {
-      const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
-      if (tbpMatch) blobValue = tbpMatch[1];
-    }
-
-    if (blobValue) {
-      const plain = decrypt(blobValue);
-      if (plain) {
-        const parts = plain.replace(/[{}]/g, '\n').split('\n');
-        for (const part of parts) {
-          const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-          if (m) respLines.push({ sourceName: m[2], hex: m[1] });
-        }
-      } else {
-        console.error('[parseSourceLines] Decryption of tobeparsed blob failed — key may need updating');
-      }
-    }
-  } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
-    const raw = JSON.stringify(apiData.data.episode.sourceUrls);
-    const cleaned = raw.replace(/\\u002F/g, '/').replace(/\\/g, '');
-    const parts = cleaned.replace(/[{}]/g, '\n').split('\n');
-    for (const part of parts) {
-      const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-      if (m) respLines.push({ sourceName: m[2], hex: m[1] });
-    }
-  }
-
-  return respLines;
-}
-
-async function fetchEpisodeApiData(showId, epNo, mode) {
-  const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-    episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
-      episodeString sourceUrls
-    }
-  }`;
-  const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
-  const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-  const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-
-  return new Promise((resolve) => {
-    let settled = false;
-    let getResult = undefined;
-    let postResult = undefined;
-
-    const tryResolve = () => {
-      if (settled) return;
-      if (getResult != null) { settled = true; resolve(getResult); return; }
-      if (postResult != null) { settled = true; resolve(postResult); return; }
-      if (getResult !== undefined && postResult !== undefined) { settled = true; resolve(null); return; }
-    };
-
-    axios.get(apiUrl, {
-      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': ALLANIME_REFR },
-      timeout: 8000
-    }).then(r => {
-      getResult = JSON.stringify(r.data).includes('tobeparsed') ? r.data : null;
-      tryResolve();
-    }).catch((e) => { console.error('[fetchEpisodeApiData] GET failed:', e.message); getResult = null; tryResolve(); });
-
-    axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: { showId, translationType: mode, episodeString: epNo },
-      query: episodeEmbedGql
-    }).then(r => { postResult = r.data; tryResolve(); })
-      .catch((e) => { console.error('[fetchEpisodeApiData] POST failed:', e.message); postResult = null; tryResolve(); });
-
-    setTimeout(() => { if (!settled) { settled = true; resolve(null); } }, 10000);
-  });
-}
-
-async function fetchAllLinks(respLines) {
-  const providerDefs = [
-    { name: 'Default', filemoon: false },
-    { name: 'Yt-mp4',  filemoon: false },
-    { name: 'S-mp4',   filemoon: false },
-    { name: 'Luf-Mp4', filemoon: false },
-    { name: 'Fm-mp4',  filemoon: true  }
-  ];
-
-  const results = await Promise.all(providerDefs.map(async (prov) => {
-    const entry = respLines.find(r => r.sourceName === prov.name);
-    if (!entry) return [];
-    const decodedPath = decodeProviderId(entry.hex);
-    if (!decodedPath) return [];
-    return prov.filemoon ? getFilemoonLinks(decodedPath) : getLinks(decodedPath);
-  }));
-
-  return results.flat();
-}
-
-async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
-  try {
-    const apiData = await fetchEpisodeApiData(showId, epNo, mode);
-    if (!apiData) return null;
-
-    if (apiData.errors && apiData.errors.length > 0) {
-      const captchaErr = apiData.errors.find(e => e.message === 'NEED_CAPTCHA');
-      if (captchaErr) throw new Error('NEED_CAPTCHA: AllAnime API is currently requiring captcha verification.');
-      throw new Error(`AllAnime API error: ${apiData.errors.map(e => e.message).join(', ')}`);
-    }
-
-    const respLines = parseSourceLines(apiData);
-    if (respLines.length === 0) return null;
-
-    let allLinks = await fetchAllLinks(respLines);
-    if (allLinks.length === 0) return null;
-
-    allLinks.sort((a, b) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
-
-    let selected;
-    if (quality === 'best') {
-      selected = allLinks[0];
-    } else if (quality === 'worst') {
-      const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
-      selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[allLinks.length - 1];
-    } else {
-      const requestedRes = parseInt(quality) || 9999;
-      selected = allLinks.find(l => l.resolution.includes(quality));
-      if (!selected) {
-        const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
-        const atOrBelow = numeric.filter(l => parseInt(l.resolution) <= requestedRes);
-        selected = atOrBelow.length > 0 ? atOrBelow[0] : (numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[0]);
-      }
-    }
-
-    return selected.url.replace(/([^:])\/\//g, '$1/');
-
-  } catch (e) {
-    console.error('[getEpisodeUrl] Error:', e.message);
-    if (e.message && e.message.startsWith('NEED_CAPTCHA')) throw e;
-    return null;
-  }
-}
-
+/**
+ * Get all stream links for an episode.
+ * Returns array of { url, resolution, is_hls }
+ */
 async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', title = null) {
-  try {
-    const apiData = await fetchEpisodeApiData(showId, epNo, mode);
-    if (!apiData) return [];
-
-    if (apiData.errors?.length > 0) {
-      const captchaErr = apiData.errors.find(e => e.message === 'NEED_CAPTCHA');
-      if (captchaErr) throw new Error('NEED_CAPTCHA');
-      return [];
-    }
-
-    const respLines = parseSourceLines(apiData);
-    if (respLines.length === 0) return [];
-
-    let allLinks = await fetchAllLinks(respLines);
-    if (allLinks.length === 0) return [];
-
-    allLinks.sort((a, b) => {
-      const aIsHls = a.url.includes('.m3u8') ? 1 : 0;
-      const bIsHls = b.url.includes('.m3u8') ? 1 : 0;
-      if (aIsHls !== bIsHls) return aIsHls - bIsHls;
-      return (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0);
-    });
-
-    if (quality !== 'best' && quality !== 'worst') {
-      const requestedRes = parseInt(quality) || 9999;
-      const preferred = allLinks.find(l => l.resolution.includes(quality));
-      if (preferred) {
-        allLinks = [preferred, ...allLinks.filter(l => l !== preferred)];
-      } else {
-        const atOrBelow = allLinks.filter(l => !l.url.includes('.m3u8') && parseInt(l.resolution) <= requestedRes);
-        if (atOrBelow.length > 0) {
-          allLinks = [atOrBelow[0], ...allLinks.filter(l => l !== atOrBelow[0])];
-        }
-      }
-    } else if (quality === 'worst') {
-      allLinks.reverse();
-    }
-
-    return allLinks.map(l => ({ ...l, url: l.url.replace(/([^:])\/\//g, '$1/') }));
-
-  } catch (e) {
-    console.error('[getAllEpisodeLinks] Error:', e.message);
-    if (e.message?.startsWith('NEED_CAPTCHA')) throw e;
-    return [];
+  // If title provided, seed the cache with it for better matching
+  if (title && !_idCache.has(showId)) {
+    const resolved = await searchBestMatch(title);
+    if (resolved) _idCache.set(showId, resolved);
   }
+
+  const resolved = await resolveId(showId, title);
+  if (!resolved) return [];
+
+  const { provider, id } = resolved;
+  const episodes = await fetchEpisodes(provider, id);
+
+  if (!episodes.length) return [];
+
+  // Find the matching episode
+  const targetNo = parseFloat(epNo);
+  let ep = episodes.find(e => parseFloat(e.number) === targetNo);
+
+  // Fallback: nearest episode number
+  if (!ep) {
+    ep = episodes.reduce((closest, e) => {
+      const diff = Math.abs(parseFloat(e.number) - targetNo);
+      const closestDiff = Math.abs(parseFloat(closest?.number || 0) - targetNo);
+      return diff < closestDiff ? e : closest;
+    }, episodes[0]);
+  }
+
+  if (!ep) return [];
+
+  const sources = await fetchSources(provider, ep.id);
+  if (!sources.length) return [];
+
+  // Sort by quality preference
+  let sorted = [...sources];
+  if (quality === 'worst') {
+    sorted.reverse();
+  } else if (quality !== 'best') {
+    const req = parseInt(quality) || 9999;
+    const preferred = sorted.find(s => String(s.quality).includes(quality));
+    if (preferred) {
+      sorted = [preferred, ...sorted.filter(s => s !== preferred)];
+    } else {
+      const atOrBelow = sorted.filter(s => !s.isM3U8 && parseInt(s.quality) <= req);
+      if (atOrBelow.length) sorted = [atOrBelow[0], ...sorted.filter(s => s !== atOrBelow[0])];
+    }
+  }
+
+  return sorted.map(s => ({
+    url:        s.url,
+    resolution: String(s.quality),
+    is_hls:     s.isM3U8,
+  }));
 }
 
+/**
+ * Get a single stream URL (best quality by default).
+ */
+async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+  const links = await getAllEpisodeLinks(showId, epNo, mode, quality);
+  return links.length ? links[0].url : null;
+}
+
+/**
+ * Episode metadata (title, description, thumbnail).
+ * Consumet doesn't always provide per-episode metadata; we return what we can.
+ */
 async function getEpisodeInfo(showId, epNo) {
-  const epNum = parseFloat(epNo);
-  const query = `query ($showId: String!, $epNum: Float!) {
-    episodeInfos( showId: $showId episodeNumStart: $epNum episodeNumEnd: $epNum ) {
-      episodeIdNum notes description thumbnails
-    }
-  }`;
+  const resolved = await resolveId(showId);
+  if (!resolved) return null;
 
-  try {
-    const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: { showId, epNum },
-      query
-    });
+  const { provider, id } = resolved;
+  const episodes = await fetchEpisodes(provider, id);
+  const targetNo = parseFloat(epNo);
+  const ep = episodes.find(e => parseFloat(e.number) === targetNo);
+  if (!ep) return null;
 
-    const infos = response.data.data.episodeInfos;
-    if (!infos || infos.length === 0) return null;
-
-    const info = infos[0];
-    let thumbnails = (info.thumbnails || []).map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
-
-    return {
-      episode_no: info.episodeIdNum,
-      title: info.notes || '',
-      description: info.description || '',
-      thumbnails
-    };
-  } catch (e) {
-    console.error('[getEpisodeInfo] Error:', e.message);
-    return null;
-  }
+  return {
+    episode_no:  ep.number || epNo,
+    title:       ep.title || ep.description || '',
+    description: ep.description || '',
+    thumbnails:  ep.image ? [ep.image] : [],
+  };
 }
 
+/**
+ * Return available quality strings for an episode.
+ */
 async function getAvailableQualities(showId, epNo, mode = 'sub') {
-  try {
-    const apiData = await fetchEpisodeApiData(showId, epNo, mode);
-    if (!apiData || (apiData.errors && apiData.errors.length > 0)) return [];
-
-    const respLines = parseSourceLines(apiData);
-    if (respLines.length === 0) return [];
-
-    const allLinks = await fetchAllLinks(respLines);
-    if (allLinks.length === 0) return [];
-
-    return [...new Set(allLinks.map(l => l.resolution))];
-  } catch (e) {
-    console.error('[getAvailableQualities] Error:', e.message);
-    return [];
-  }
+  const links = await getAllEpisodeLinks(showId, epNo, mode, 'best');
+  return [...new Set(links.map(l => l.resolution))];
 }
 
+/**
+ * Debug wrapper — same as getEpisodeUrl but returns an object.
+ */
 async function getEpisodeUrlDebug(showId, epNo, mode = 'sub', quality = 'best') {
   const url = await getEpisodeUrl(showId, epNo, mode, quality);
-  return { url, debug: {} };
+  return { url, debug: { showId, epNo, mode, quality } };
 }
+
+// ── EXPORTS ───────────────────────────────────────────────────────────────────
 
 module.exports = {
   searchAnime,
@@ -543,5 +385,5 @@ module.exports = {
   getEpisodeUrlDebug,
   getEpisodeInfo,
   getAvailableQualities,
-  getAllEpisodeLinks
+  getAllEpisodeLinks,
 };
