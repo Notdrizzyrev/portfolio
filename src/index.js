@@ -13,45 +13,27 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '5.2.0' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '6.0.0', source: 'consumet' });
 });
 
-// Tests all known AllAnime domains and reports which one works.
-// Hit /test-domain in your browser to diagnose API issues.
+// ── HEALTH / SOURCE CHECK ─────────────────────────────────────────────────────
+// Replaces /test-domain — checks whether the Consumet API is reachable.
+
 app.get('/test-domain', async (req, res) => {
-  const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
-  const POSSIBLE_DOMAINS = [
-    'allanime.day', 'allanime.to', 'allmanga.to',
-    'allanime.pro', 'allanime.co', 'allanime.tv', 'allanime.site'
-  ];
-  const testQuery = {
-    variables: { search: { query: 'naruto', allowAdult: false, allowUnknown: false }, limit: 1, page: 1, countryOrigin: 'ALL' },
-    query: `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
-      shows(search: $search limit: $limit page: $page countryOrigin: $countryOrigin) { edges { _id name } }
-    }`
-  };
-  const results = {};
-  for (const domain of POSSIBLE_DOMAINS) {
-    try {
-      const r = await axios.post(`https://api.${domain}/api`, testQuery, {
-        headers: { 'User-Agent': AGENT, 'Referer': `https://${domain}`, 'Origin': `https://${domain}` },
-        timeout: 8000,
-        maxRedirects: 3
-      });
-      const works = !!(r.data?.data?.shows?.edges?.length > 0);
-      results[`api.${domain}`] = { status: r.status, works };
-    } catch (e) {
-      results[`api.${domain}`] = {
-        error: e.message,
-        httpStatus: e.response?.status || null,
-        redirectsTo: e.response?.headers?.location || null
-      };
-    }
+  const CONSUMET = (process.env.CONSUMET_API || 'https://api.consumet.org').replace(/\/$/, '');
+  try {
+    const r = await axios.get(`${CONSUMET}/anime/gogoanime/naruto`, { timeout: 8000 });
+    const works = !!(r.data?.results?.length > 0);
+    res.json({ working: works ? CONSUMET : 'none found', results: { [CONSUMET]: { status: r.status, works } } });
+  } catch (e) {
+    res.json({ working: 'none found', results: { [CONSUMET]: { error: e.message } } });
   }
-  const working = Object.entries(results).find(([, v]) => v.works);
-  res.json({ working: working ? working[0] : 'none found', results });
 });
+
+// ── SEARCH ────────────────────────────────────────────────────────────────────
 
 app.get('/search', async (req, res) => {
   const query = req.query.query || '';
@@ -64,6 +46,8 @@ app.get('/search', async (req, res) => {
   }
 });
 
+// ── ANIME DETAILS ─────────────────────────────────────────────────────────────
+
 app.get('/anime/:id', async (req, res) => {
   try {
     const details = await scraper.getAnimeDetails(req.params.id);
@@ -73,6 +57,8 @@ app.get('/anime/:id', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── DUB CHECK ─────────────────────────────────────────────────────────────────
 
 app.get('/dub-check', async (req, res) => {
   const { show_id } = req.query;
@@ -87,6 +73,8 @@ app.get('/dub-check', async (req, res) => {
   }
 });
 
+// ── EPISODES LIST ─────────────────────────────────────────────────────────────
+
 app.get('/episodes/:id', async (req, res) => {
   const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
   try {
@@ -95,6 +83,8 @@ app.get('/episodes/:id', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── EPISODE URL ───────────────────────────────────────────────────────────────
 
 app.get('/episode_url', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: rawMode, title } = req.query;
@@ -105,15 +95,19 @@ app.get('/episode_url', async (req, res) => {
     if (!links || links.length === 0) return res.status(404).json({ error: 'Not found' });
     res.json({
       episode_url: links[0].url,
-      is_hls: links[0].url.includes('.m3u8'),
+      is_hls:      links[0].url.includes('.m3u8') || links[0].is_hls,
       mode,
-      quality: links[0].resolution,
-      all_links: links
+      quality:     links[0].resolution,
+      all_links:   links
     });
   } catch (e) {
+    // Consumet doesn't have CAPTCHA but keep the 503 shape just in case
     res.status(e.message?.startsWith('NEED_CAPTCHA') ? 503 : 500).json({ error: e.message });
   }
 });
+
+// ── PLAY PROXY ────────────────────────────────────────────────────────────────
+// Streams MP4 through the backend to avoid browser CORS restrictions.
 
 app.get('/play', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: rawMode, download, title } = req.query;
@@ -130,34 +124,34 @@ app.get('/play', async (req, res) => {
     }
 
     const videoHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-      'Referer':  'https://allmanga.to',
-      'Origin':   'https://allmanga.to',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+      'Referer':    'https://gogoanime.cl/',
+      'Origin':     'https://gogoanime.cl',
     };
     if (req.headers['range']) videoHeaders['Range'] = req.headers['range'];
 
     let lastError = null;
     for (const link of links) {
-      if (link.url.includes('.m3u8')) {
+      if (link.url.includes('.m3u8') || link.is_hls) {
         return res.redirect(link.url);
       }
       try {
         const videoResp = await axios.get(link.url, {
-          headers: videoHeaders,
+          headers:      videoHeaders,
           responseType: 'stream',
-          timeout: 15000,
+          timeout:      15000,
           maxRedirects: 5,
         });
 
         if (videoResp.status >= 200 && videoResp.status < 400) {
-          res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
-          res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-          res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-          res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
+          res.setHeader('Access-Control-Allow-Origin',    req.headers['origin'] || '*');
+          res.setHeader('Access-Control-Expose-Headers',  'Content-Length, Content-Range, Accept-Ranges');
+          res.setHeader('Cross-Origin-Resource-Policy',   'cross-origin');
+          res.setHeader('Content-Type',  videoResp.headers['content-type'] || 'video/mp4');
           res.setHeader('Accept-Ranges', 'bytes');
           res.setHeader('Content-Disposition', download === '1' ? `attachment; filename="ep${ep_no}.mp4"` : 'inline');
           if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
-          if (videoResp.headers['content-range'])  res.setHeader('Content-Range', videoResp.headers['content-range']);
+          if (videoResp.headers['content-range'])  res.setHeader('Content-Range',  videoResp.headers['content-range']);
           res.status(videoResp.status);
           videoResp.data.pipe(res);
           res.on('close', () => videoResp.data.destroy());
@@ -187,6 +181,8 @@ app.options('/play', (req, res) => {
   res.sendStatus(204);
 });
 
+// ── QUALITIES ─────────────────────────────────────────────────────────────────
+
 app.get('/qualities', async (req, res) => {
   const { show_id, ep_no, mode: rawMode } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
@@ -197,6 +193,8 @@ app.get('/qualities', async (req, res) => {
     res.status(500).json({ error: e.message, qualities: [] });
   }
 });
+
+// ── EPISODE INFO ──────────────────────────────────────────────────────────────
 
 app.get('/episode_info', async (req, res) => {
   const { show_id, ep_no } = req.query;
@@ -209,6 +207,8 @@ app.get('/episode_info', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── THUMBNAILS ────────────────────────────────────────────────────────────────
 
 app.post('/thumbnails', async (req, res) => {
   const ids = req.body?.ids || req.body?.mal_ids;
@@ -225,6 +225,9 @@ app.post('/thumbnails', async (req, res) => {
   res.json(results);
 });
 
+// ── START ─────────────────────────────────────────────────────────────────────
+
 app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend running on port ${PORT}`);
+  console.log(`✅ AnimeVault backend v6.0 (Consumet) running on port ${PORT}`);
+  console.log(`   Consumet API: ${process.env.CONSUMET_API || 'https://api.consumet.org'}`);
 });
