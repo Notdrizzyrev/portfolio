@@ -1,12 +1,15 @@
-
 /**
- * AnimeVault Scraper v7.2 — AllAnime Edition (title-aware + progressive fallback)
+ * AnimeVault Scraper v7.3 — AllAnime Edition (allanime.to + CF fix)
  *
- * v7.2 fix: lowered bestScore threshold from 25 → 15 so MAL titles that score
- * just below the old cutoff (e.g. "Re:ZERO -Starting Life..." vs AllAnime's
- * "Re Zero Starting Life...") still resolve correctly.
- * titleScore() also now strips special chars before word-overlap so punctuation
- * differences don't torpedo the score.
+ * v7.3 fixes:
+ * 1. Domain changed allanime.day → allanime.to
+ *    api.allanime.day is now behind Cloudflare which blocks scrapers.
+ * 2. Removed the GET/persisted-query attempt in fetchEpisodeSources.
+ *    api.allanime.to has a Cloudflare JS challenge on GET requests; the
+ *    old code tried GET first, CF silently challenged it, and even though
+ *    it fell through to POST the inconsistent state caused empty source
+ *    lists. Now we go straight to POST every time.
+ * 3. EPISODE_QUERY_HASH kept for reference but no longer used in requests.
  */
 
 const axios = require('axios');
@@ -16,11 +19,9 @@ const crypto = require('crypto');
 
 const AGENT         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
 const ALLANIME_REFR = 'https://allmanga.to';
-const ALLANIME_BASE = 'allanime.day';
+const ALLANIME_BASE = 'allanime.to';                          // v7.3: was allanime.day
 const ALLANIME_API  = `https://api.${ALLANIME_BASE}`;
 const ALLANIME_KEY  = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
-
-const EPISODE_QUERY_HASH = 'd405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec';
 
 const axiosInstance = axios.create({
   headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR },
@@ -88,10 +89,6 @@ function normTitle(s) {
     .replace(/\s+/g, ' ').trim();
 }
 
-/**
- * v7.2: also strip ALL special chars (not just colons/dashes) before word-overlap
- * so "Re:ZERO" vs "Re Zero" get full word credit instead of 0.
- */
 function titleScore(a, b) {
   const na = normTitle(a), nb = normTitle(b);
   if (!na || !nb) return 0;
@@ -104,7 +101,6 @@ function titleScore(a, b) {
   const overlap = wb.filter(w => wa.has(w)).length;
   if (!overlap) return 0;
   const ratio = overlap / Math.max(wa.size, wb.length);
-  // Boost: if every word in the shorter title appears in the longer one → 70+
   const shorter = wa.size <= wb.length ? [...wa] : wb;
   const allMatch = shorter.every(w => (wa.size <= wb.length ? wb.includes(w) : wa.has(w)));
   if (allMatch) return Math.round(70 + ratio * 25);
@@ -122,13 +118,9 @@ function titleFallbacks(raw) {
     if (t && !seen.has(t)) { seen.add(t); results.push(t); }
   };
 
-  // 1. Original
   add(raw);
-
-  // 2. Strip trailing season/part/cour/arc/OVA/Special suffixes
   add(raw.replace(/\s*[\-–:]?\s*(season|part|cour|arc|ova|special|movie|film|chapter)\s*\d*\s*$/i, '').trim());
 
-  // 3. Strip decorative dashes like " -Subtitle Here-"
   const noDashSub = raw
     .replace(/\s+[-–]\s+[^-–]+[-–]?\s*$/i, '')
     .replace(/\s+[-–][^-–]+[-–]\s*$/i, '')
@@ -136,15 +128,12 @@ function titleFallbacks(raw) {
   add(noDashSub);
   add(noDashSub.replace(/\s*(season|part|cour|arc)\s*\d*\s*$/i, '').trim());
 
-  // 4. Replace all special chars with spaces
   const cleaned = raw.replace(/[:\-–!?'"]/g, ' ').replace(/\s+/g, ' ').trim();
   add(cleaned);
 
-  // 5. First 4 significant words of cleaned version
   const words = cleaned.split(' ').filter(w => w.length > 1);
   if (words.length > 4) add(words.slice(0, 4).join(' '));
 
-  // 6. Everything before the first colon or long dash
   add(raw.split(/[:\-–]/)[0].trim());
 
   return results;
@@ -154,10 +143,6 @@ function titleFallbacks(raw) {
 
 const _idCache = new Map();
 
-/**
- * v7.2: threshold lowered from 25 → 15 so near-miss MAL/AllAnime title pairs
- * (different punctuation, romanisation etc.) still resolve correctly.
- */
 async function resolveShowId(showId, title = null) {
   const cacheKey = title ? `${showId}::${title}` : showId;
   if (_idCache.has(cacheKey)) return _idCache.get(cacheKey);
@@ -192,11 +177,9 @@ async function resolveShowId(showId, title = null) {
       if (s > bestScore) { bestScore = s; best = r; }
     }
 
-    // Good enough — stop early
     if (bestScore >= 75) break;
   }
 
-  // ▼ v7.2: lowered from 25 → 15
   if (!best || bestScore < 15) return null;
 
   _idCache.set(cacheKey, best.id);
@@ -337,32 +320,19 @@ async function getFilemoonLinks(providerPath) {
 // ── EPISODE API CALL ──────────────────────────────────────────────────────────
 
 async function fetchEpisodeSources(showId, epNo, mode = 'sub') {
+  // v7.3: POST-only — GET is blocked by Cloudflare on api.allanime.to
   const episodeGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
     episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
-      episodeString sourceUrls
+      episodeString sourceUrls tobeparsed
     }
   }`;
 
-  let apiData = null;
+  const r = await withRetry(() => axiosInstance.post(`${ALLANIME_API}/api`, {
+    variables: { showId, translationType: mode, episodeString: String(epNo) },
+    query: episodeGql,
+  }));
 
-  try {
-    const vars = JSON.stringify({ showId, translationType: mode, episodeString: String(epNo) });
-    const ext  = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-    const url  = `${ALLANIME_API}/api?variables=${encodeURIComponent(vars)}&extensions=${encodeURIComponent(ext)}`;
-    const r    = await withRetry(() => axios.get(url, {
-      headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
-      timeout: 6000,
-    }));
-    if (JSON.stringify(r.data).includes('tobeparsed')) apiData = r.data;
-  } catch { /* fall through to POST */ }
-
-  if (!apiData) {
-    const r = await withRetry(() => axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: { showId, translationType: mode, episodeString: String(epNo) },
-      query: episodeGql,
-    }));
-    apiData = r.data;
-  }
+  const apiData = r.data;
 
   if (apiData?.errors?.length) {
     const cap = apiData.errors.find(e => e.message === 'NEED_CAPTCHA');
