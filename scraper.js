@@ -1,487 +1,569 @@
-/**
- * AnimeVault Scraper v8.0 — AnimeKai Edition (animekai.to)
- *
- * Sources: animekai.to (search + episode list + stream sources)
- * Providers supported: MegaCloud / RapidCloud / StreamTape / Mp4Upload
- *
- * Flow:
- *   1. searchAnime(query)          → fuzzy search animekai.to
- *   2. resolveKaiId(malId, title)  → MAL id → animekai slug (cached)
- *   3. getEpisodesList(id, mode)   → list of episode objects {id, number}
- *   4. fetchSources(epId)          → encrypted embed → decrypted m3u8/mp4 URLs
- */
+const axios = require('axios');
+const crypto = require('crypto');
 
-const axios   = require('axios');
-const cheerio = require('cheerio');
-const crypto  = require('crypto');
+const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
+const ALLANIME_REFR = "https://allmanga.to";
+const ALLANIME_BASE = "allanime.day";
+const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
+const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 
-// ── CONFIG ────────────────────────────────────────────────────────────────────
+// Persisted query hash for episode embeds (from ani-cli v4.14.0)
+const EPISODE_QUERY_HASH = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
 
-const BASE     = 'https://animekai.to';
-const AJAX     = `${BASE}/ajax`;
-const AGENT    = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0';
-
-const http = axios.create({
-  baseURL: BASE,
-  headers: {
-    'User-Agent': AGENT,
-    'Referer':    BASE,
-    'X-Requested-With': 'XMLHttpRequest',
-  },
-  timeout: 10000,
+const axiosInstance = axios.create({
+    headers: {
+        'User-Agent': AGENT,
+        'Referer': ALLANIME_REFR
+    },
+    timeout: 5000
 });
 
-// ── HELPERS ───────────────────────────────────────────────────────────────────
+function decrypt(blob) {
+    try {
+        const data = Buffer.from(blob, 'base64');
+        // v4.13+: skip 1st byte (version), IV = next 12 bytes, last 16 bytes = auth tag, middle = ciphertext
+        const iv = data.slice(1, 13);
+        const ctLen = data.length - 13 - 16;
+        const ciphertext = data.slice(13, 13 + ctLen);
+        const ctr = Buffer.concat([iv, Buffer.from([0, 0, 0, 2])]);
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-async function withRetry(fn, tries = 3, base = 700) {
-  let last;
-  for (let i = 0; i < tries; i++) {
-    try { return await fn(); } catch (e) {
-      last = e;
-      if (i < tries - 1) await sleep(base * (i + 1));
+        const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(ALLANIME_KEY, 'hex'), ctr);
+        let decrypted = decipher.update(ciphertext);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        return decrypted.toString('utf8');
+    } catch (e) {
+        return null;
     }
-  }
-  throw last;
 }
 
-// ── TITLE HELPERS ─────────────────────────────────────────────────────────────
-
-function norm(s) {
-  return (s || '').toLowerCase()
-    .replace(/[:\u2013\u2014!?'"]/g, ' ')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ').trim();
+// Filemoon provider decryption (v4.14.0)
+// Decodes base64url to hex
+function b64urlToHex(b64url) {
+    // Add padding
+    let padded = b64url;
+    const mod = padded.length % 4;
+    if (mod === 2) padded += '==';
+    else if (mod === 3) padded += '=';
+    // Convert base64url to standard base64
+    const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+    return Buffer.from(b64, 'base64').toString('hex');
 }
 
-function titleScore(a, b) {
-  const na = norm(a), nb = norm(b);
-  if (!na || !nb) return 0;
-  if (na === nb) return 100;
-  if (na.replace(/ /g,'') === nb.replace(/ /g,'')) return 97;
-  if (na.includes(nb) || nb.includes(na)) return 85;
-  const wa = new Set(na.split(' ').filter(w => w.length > 1));
-  const wb = nb.split(' ').filter(w => w.length > 1);
-  const overlap = wb.filter(w => wa.has(w)).length;
-  if (!overlap) return 0;
-  const ratio = overlap / Math.max(wa.size, wb.length);
-  return Math.round(ratio * 65);
-}
+async function getFilemoonLinks(providerPath) {
+    const allLinks = [];
+    const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
 
-// ── ID CACHE ──────────────────────────────────────────────────────────────────
+    try {
+        const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
+        const fmData = response.data;
 
-const _kaiCache = new Map(); // malId → { slug, kaiId }
+        if (fmData && fmData.iv && fmData.payload && fmData.key_parts) {
+            const kp1 = fmData.key_parts[0];
+            const kp2 = fmData.key_parts[1];
+            const keyHex = b64urlToHex(kp1) + b64urlToHex(kp2);
+            const ivHex = b64urlToHex(fmData.iv) + '00000002';
 
-// ── SEARCH ────────────────────────────────────────────────────────────────────
+            // Decode payload from base64url
+            let payloadB64 = fmData.payload;
+            const pMod = payloadB64.length % 4;
+            if (pMod === 2) payloadB64 += '==';
+            else if (pMod === 3) payloadB64 += '=';
+            payloadB64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+            const payloadBuf = Buffer.from(payloadB64, 'base64');
 
-/**
- * Search animekai.to — returns [{id, slug, title, type, episodes_sub, episodes_dub}]
- * id   = numeric animekai show ID (used for episode list)
- * slug = URL slug (e.g. "one-piece-100")
- */
-async function searchAnime(query) {
-  try {
-    const r = await withRetry(() =>
-      http.get('/browser', { params: { keyword: query } })
-    );
-    const $ = cheerio.load(r.data);
-    const results = [];
+            // Strip last 16 bytes (auth tag)
+            const ctLen = payloadBuf.length - 16;
+            const ciphertext = payloadBuf.slice(0, ctLen);
 
-    $('.film-list .flw-item').each((_, el) => {
-      const a     = $(el).find('.film-name a');
-      const title = a.text().trim();
-      const href  = a.attr('href') || '';           // e.g. /watch/one-piece-100
-      const slug  = href.replace(/^\/watch\//, '').replace(/\?.*$/, '');
-      const idEl  = $(el).find('[data-id]');
-      const id    = idEl.attr('data-id') || $(el).attr('data-id') || '';
-      const type  = $(el).find('.fdi-type').text().trim() || 'TV';
+            const decipher = crypto.createDecipheriv('aes-256-ctr', Buffer.from(keyHex, 'hex'), Buffer.from(ivHex, 'hex'));
+            let decrypted = decipher.update(ciphertext);
+            decrypted = Buffer.concat([decrypted, decipher.final()]);
+            const plain = decrypted.toString('utf8');
 
-      if (title && slug) {
-        results.push({ id, slug, title, type });
-      }
-    });
-
-    return results;
-  } catch {
-    return [];
-  }
-}
-
-// ── RESOLVE ID ────────────────────────────────────────────────────────────────
-
-async function resolveKaiId(malId, title) {
-  const key = malId || title;
-  if (_kaiCache.has(key)) return _kaiCache.get(key);
-
-  const queries = [];
-  if (title) queries.push(title);
-
-  // Also try stripping season suffixes
-  if (title) {
-    const stripped = title.replace(/\s*(season|part|cour|arc)\s*\d*\s*$/i, '').trim();
-    if (stripped && stripped !== title) queries.push(stripped);
-    queries.push(title.split(/[:\-–]/)[0].trim());
-  }
-
-  let best = null, bestScore = -1;
-
-  for (const q of [...new Set(queries)]) {
-    const results = await searchAnime(q);
-    for (const r of results) {
-      const s = Math.max(
-        titleScore(r.title, title || ''),
-        titleScore(r.title, q),
-      );
-      if (s > bestScore) { bestScore = s; best = r; }
-    }
-    if (bestScore >= 75) break;
-  }
-
-  if (!best || bestScore < 20) return null;
-
-  const val = { slug: best.slug, kaiId: best.id };
-  if (malId) _kaiCache.set(malId, val);
-  if (title) _kaiCache.set(title, val);
-  return val;
-}
-
-// ── ANIME DETAILS ─────────────────────────────────────────────────────────────
-
-async function getAnimeDetails(malId, title = null) {
-  const resolved = await resolveKaiId(malId, title);
-  if (!resolved) return null;
-
-  try {
-    const r = await withRetry(() => http.get(`/watch/${resolved.slug}`));
-    const $ = cheerio.load(r.data);
-
-    const englishName = $('.anisc-detail .film-name').text().trim()
-      || $('h2.film-name').text().trim() || title || '';
-    const synopsis  = $('.film-description .text').text().trim()
-      || $('[itemprop="description"]').text().trim() || '';
-    const thumbnail = $('img.film-poster-img').attr('src')
-      || $('[itemprop="image"]').attr('src') || '';
-    const status    = $('.item-title:contains("Status") .name').text().trim() || '';
-
-    // Episode counts shown on detail page
-    const subText = $('.item-title:contains("Sub") .name').text().trim();
-    const dubText = $('.item-title:contains("Dub") .name').text().trim();
-    const eps_sub = parseInt(subText) || 0;
-    const eps_dub = parseInt(dubText) || 0;
-
-    return {
-      id:            resolved.slug,
-      kaiId:         resolved.kaiId,
-      title:         englishName,
-      title_english: englishName,
-      thumbnail_url: thumbnail,
-      synopsis:      synopsis.replace(/<[^>]*>/g, ''),
-      status,
-      episodes_sub:  eps_sub,
-      episodes_dub:  eps_dub,
-      has_dub:       eps_dub > 0,
-    };
-  } catch { return null; }
-}
-
-// ── EPISODE LIST ──────────────────────────────────────────────────────────────
-
-/**
- * Returns an array of episode objects:
- * [{ number: 1, id: 'ep-id-string', title: 'Episode Title' }, …]
- */
-async function getEpisodesList(malId, mode = 'sub', title = null) {
-  const resolved = await resolveKaiId(malId, title);
-  if (!resolved || !resolved.kaiId) return [];
-
-  try {
-    const r = await withRetry(() =>
-      http.get(`${AJAX}/episode/list/${resolved.kaiId}`)
-    );
-
-    const html = r.data?.html || r.data;
-    const $    = cheerio.load(html);
-    const eps  = [];
-
-    $('a.ep-item, .ep-item a, [data-number]').each((_, el) => {
-      const $el   = $(el);
-      const num   = parseFloat($el.attr('data-number') || $el.attr('data-ep') || '0');
-      const id    = $el.attr('data-id') || $el.attr('href')?.split('=').pop() || '';
-      const tit   = $el.attr('title') || $el.text().trim() || '';
-      const isDub = ($el.attr('data-type') || '').toLowerCase() === 'dub';
-
-      if (!num || !id) return;
-      if (mode === 'dub' && !isDub) return;
-      if (mode === 'sub' && isDub) return;
-
-      eps.push({ number: num, id, title: tit });
-    });
-
-    // If mode filtering returned nothing, return all (site may not separate)
-    if (!eps.length) {
-      $('a.ep-item, [data-number]').each((_, el) => {
-        const $el = $(el);
-        const num = parseFloat($el.attr('data-number') || '0');
-        const id  = $el.attr('data-id') || '';
-        if (!num || !id) return;
-        eps.push({ number: num, id, title: $el.attr('title') || '' });
-      });
-    }
-
-    return eps.sort((a, b) => a.number - b.number);
-  } catch { return []; }
-}
-
-// ── EPISODE SERVERS ───────────────────────────────────────────────────────────
-
-async function getEpisodeServers(epId) {
-  try {
-    const r = await withRetry(() =>
-      http.get(`${AJAX}/episode/servers`, { params: { episodeId: epId } })
-    );
-    const html = r.data?.html || r.data;
-    const $    = cheerio.load(html);
-    const servers = [];
-
-    $('[data-id][data-server-id], .server-item[data-id]').each((_, el) => {
-      const $el      = $(el);
-      const serverId = $el.attr('data-id') || '';
-      const name     = $el.text().trim() || $el.attr('data-server-id') || 'unknown';
-      if (serverId) servers.push({ id: serverId, name });
-    });
-
-    return servers;
-  } catch { return []; }
-}
-
-// ── SOURCE DECRYPTION (MegaCloud / RapidCloud) ────────────────────────────────
-
-// These keys are periodically updated by the site.
-// Key source: https://raw.githubusercontent.com/theonlymo/keys/e1/key (community-maintained)
-const KEY_URL = 'https://raw.githubusercontent.com/theonlymo/keys/e1/key';
-let _cachedKey = null;
-let _keyFetchedAt = 0;
-
-async function getDecryptionKey() {
-  const stale = Date.now() - _keyFetchedAt > 30 * 60 * 1000; // refresh every 30 min
-  if (_cachedKey && !stale) return _cachedKey;
-  try {
-    const r = await axios.get(KEY_URL, { timeout: 5000 });
-    _cachedKey     = r.data?.trim() || null;
-    _keyFetchedAt  = Date.now();
-    return _cachedKey;
-  } catch { return _cachedKey; } // use stale key on failure
-}
-
-function decryptSource(encrypted, key) {
-  try {
-    const cipher = Buffer.from(encrypted, 'base64');
-    const salt   = cipher.slice(8, 16);
-    const data   = cipher.slice(16);
-
-    // OpenSSL EVP_BytesToKey with MD5
-    const keyBuf = Buffer.from(key, 'utf8');
-    let derived = Buffer.alloc(0);
-    let prev    = Buffer.alloc(0);
-    while (derived.length < 48) {
-      prev = crypto.createHash('md5').update(Buffer.concat([prev, keyBuf, salt])).digest();
-      derived = Buffer.concat([derived, prev]);
-    }
-    const aesKey = derived.slice(0, 32);
-    const iv     = derived.slice(32, 48);
-
-    const decipher = crypto.createDecipheriv('aes-256-cbc', aesKey, iv);
-    return decipher.update(data) + decipher.final('utf8');
-  } catch { return null; }
-}
-
-// ── FETCH SOURCES FROM EMBED ──────────────────────────────────────────────────
-
-async function fetchEmbedSources(embedUrl) {
-  const links = [];
-  try {
-    const r = await withRetry(() =>
-      axios.get(embedUrl, {
-        headers: { 'User-Agent': AGENT, 'Referer': BASE },
-        timeout: 8000,
-      })
-    );
-    const body = r.data;
-
-    // Extract encrypted sources blob
-    const srcMatch = body.match(/sources\s*=\s*['"]([A-Za-z0-9+/=]+)['"]/);
-    if (srcMatch) {
-      const key = await getDecryptionKey();
-      if (key) {
-        const plain = decryptSource(srcMatch[1], key);
-        if (plain) {
-          try {
-            const parsed = JSON.parse(plain);
-            const arr = Array.isArray(parsed) ? parsed : [parsed];
-            for (const s of arr) {
-              if (s.file) {
-                links.push({
-                  url:    s.file,
-                  label:  s.label || 'auto',
-                  is_hls: (s.type || '').includes('hls') || s.file.includes('.m3u8'),
-                });
-              }
+            // Parse the decrypted JSON for video URLs
+            const parts = plain.replace(/[{}\[\]]/g, '\n').split('\n');
+            for (const part of parts) {
+                // Match "url":"..." and "height":NNN in either order
+                const m1 = part.match(/"url":"([^"]*)".*"height":(\d+)/);
+                const m2 = part.match(/"height":(\d+).*"url":"([^"]*)"/);
+                if (m1) {
+                    let url = m1[1].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=');
+                    allLinks.push({ resolution: m1[2], url });
+                } else if (m2) {
+                    let url = m2[2].replace(/\\u0026/g, '&').replace(/\\u003D/g, '=');
+                    allLinks.push({ resolution: m2[1], url });
+                }
             }
-          } catch {}
         }
-      }
+    } catch (e) {
+        // Filemoon provider fetch failed
     }
 
-    // Fallback: plain JSON sources array (not encrypted)
-    if (!links.length) {
-      const plain = body.match(/sources\s*:\s*(\[.*?\])/s);
-      if (plain) {
+    return allLinks;
+}
+
+// Custom hex decoding from anime.sh (provider_init)
+const decodeMapping = {
+    '79': 'A', '7a': 'B', '7b': 'C', '7c': 'D', '7d': 'E', '7e': 'F', '7f': 'G', '70': 'H', '71': 'I', '72': 'J', '73': 'K', '74': 'L', '75': 'M', '76': 'N', '77': 'O',
+    '68': 'P', '69': 'Q', '6a': 'R', '6b': 'S', '6c': 'T', '6d': 'U', '6e': 'V', '6f': 'W', '60': 'X', '61': 'Y', '62': 'Z',
+    '59': 'a', '5a': 'b', '5b': 'c', '5c': 'd', '5d': 'e', '5e': 'f', '5f': 'g', '50': 'h', '51': 'i', '52': 'j', '53': 'k', '54': 'l', '55': 'm', '56': 'n', '57': 'o',
+    '48': 'p', '49': 'q', '4a': 'r', '4b': 's', '4c': 't', '4d': 'u', '4e': 'v', '4f': 'w', '40': 'x', '41': 'y', '42': 'z',
+    '08': '0', '09': '1', '0a': '2', '0b': '3', '0c': '4', '0d': '5', '0e': '6', '0f': '7', '00': '8', '01': '9',
+    '15': '-', '16': '.', '67': '_', '46': '~', '02': ':', '17': '/', '07': '?', '1b': '#', '63': '[', '65': ']', '78': '@', '19': '!', '1c': '$', '1e': '&', '10': '(', '11': ')', '12': '*', '13': '+', '14': ',', '03': ';', '05': '=', '1d': '%'
+};
+
+function decodeProviderId(hex) {
+    let result = '';
+    for (let i = 0; i < hex.length; i += 2) {
+        const part = hex.substring(i, i + 2);
+        result += decodeMapping[part] || '';
+    }
+    return result.replace('/clock', '/clock.json');
+}
+
+// Mirrors get_links() from anime.sh
+async function getLinks(providerPath) {
+    let allLinks = [];
+
+    // If path contains tools.fast4speed.rsvp, output it directly (direct mp4 link)
+    if (providerPath.includes('tools.fast4speed.rsvp')) {
+        allLinks.push({ resolution: 'Yt', url: providerPath });
+        return allLinks;
+    }
+
+    // For non-direct URLs, fetch the provider JSON
+    const fetchUrl = providerPath.startsWith('http') ? providerPath : `https://${ALLANIME_BASE}${providerPath}`;
+
+    try {
+        const response = await axiosInstance.get(fetchUrl, { timeout: 4000 });
+        const providerData = response.data;
+
+        if (providerData.links && Array.isArray(providerData.links)) {
+            for (const link of providerData.links) {
+                const url = link.link;
+                const res = link.resolutionStr || 'unknown';
+
+                if (url && url.includes('repackager.wixmp.com')) {
+                    // wixmp repackager: extract individual quality URLs (anime.sh lines 35-40)
+                    const cleaned = url.replace('repackager.wixmp.com/', '').replace(/\.urlset.*/, '');
+                    const qualitiesMatch = url.match(/\/,([^/]*),\/mp4/);
+                    if (qualitiesMatch) {
+                        const qualities = qualitiesMatch[1].split(',');
+                        for (const q of qualities) {
+                            const qUrl = cleaned.replace(/,[^/]*/, q);
+                            allLinks.push({ resolution: q, url: qUrl });
+                        }
+                    } else {
+                        allLinks.push({ resolution: res, url });
+                    }
+                } else if (url) {
+                    allLinks.push({ resolution: res, url });
+                }
+            }
+        }
+
+        if (providerData.hls && providerData.hls.url) {
+            allLinks.push({ resolution: 'hls', url: providerData.hls.url });
+        }
+    } catch (e) {
+        // Provider fetch failed — timed out or returned error
+    }
+
+    return allLinks;
+}
+
+async function searchAnime(query) {
+    const searchGql = `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
+        shows( search: $search limit: $limit page: $page countryOrigin: $countryOrigin ) {
+            edges {
+                _id
+                name
+                englishName
+                nativeName
+                availableEpisodes
+                __typename
+            }
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: {
+                search: {
+                    allowAdult: false,
+                    allowUnknown: false,
+                    query: query
+                },
+                limit: 40,
+                page: 1,
+                countryOrigin: "ALL"
+            },
+            query: searchGql
+        });
+
+        const shows = response.data.data.shows.edges;
+        return shows.map(show => ({
+            id: show._id,
+            title: show.englishName || show.name.replace(/\\"/g, '"'),
+            episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
+            episodes_dub: parseInt(show.availableEpisodes.dub) || 0
+        }));
+    } catch (e) {
+        return [];
+    }
+}
+
+async function getAnimeDetails(showId) {
+    const query = `query ($showId: String!) {
+        show( _id: $showId ) {
+            _id
+            name
+            englishName
+            nativeName
+            thumbnail
+            description
+            status
+            availableEpisodesDetail
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId },
+            query: query
+        });
+
+        const show = response.data.data.show;
+        if (!show) return null;
+
+        return {
+            id: show._id,
+            title: show.englishName || show.name,
+            title_english: show.englishName || show.name,
+            thumbnail_url: show.thumbnail,
+            synopsis: show.description ? show.description.replace(/<[^>]*>?/gm, '') : '',
+            status: show.status,
+            episodes_sub: show.availableEpisodesDetail.sub ? show.availableEpisodesDetail.sub.length : 0,
+            episodes_dub: show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+async function getEpisodesList(showId, mode = 'sub') {
+    const episodesListGql = `query ($showId: String!) {
+        show( _id: $showId ) {
+            _id
+            availableEpisodesDetail
+        }
+    }`;
+
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId },
+            query: episodesListGql
+        });
+
+        const details = response.data.data.show.availableEpisodesDetail;
+        const episodes = details[mode] || [];
+        return episodes.sort((a, b) => parseFloat(a) - parseFloat(b));
+    } catch (e) {
+        return [];
+    }
+}
+
+// Parse tobeparsed/sourceUrls from API response into respLines
+function parseSourceLines(apiData) {
+    const rawJson = JSON.stringify(apiData);
+    const hasTobeparsed = rawJson.includes('"tobeparsed"');
+    let respLines = [];
+
+    if (hasTobeparsed) {
+        // Extract the tobeparsed blob from wherever it lives in the response
+        const data = apiData.data;
+        const blob = apiData.tobeparsed ||
+            (data && data.tobeparsed) ||
+            (data && data.episode && data.episode.tobeparsed) ||
+            null;
+
+        let blobValue = blob;
+        if (!blobValue) {
+            // Fallback: regex extraction from raw JSON
+            const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
+            if (tbpMatch) blobValue = tbpMatch[1];
+        }
+
+        if (blobValue) {
+            const plain = decrypt(blobValue);
+            if (plain) {
+                const parts = plain.replace(/[{}]/g, '\n').split('\n');
+                for (const part of parts) {
+                    const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+                    if (m) {
+                        respLines.push({ sourceName: m[2], hex: m[1] });
+                    }
+                }
+            } else {
+                console.error("Decryption of tobeparsed blob failed — key may need updating");
+            }
+        }
+    } else if (apiData.data && apiData.data.episode && apiData.data.episode.sourceUrls) {
+        // Fallback: unencrypted sourceUrls
+        const raw = JSON.stringify(apiData.data.episode.sourceUrls);
+        const cleaned = raw.replace(/\\u002F/g, '/').replace(/\\/g, '');
+        const parts = cleaned.replace(/[{}]/g, '\n').split('\n');
+        for (const part of parts) {
+            const m = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+            if (m) {
+                respLines.push({ sourceName: m[2], hex: m[1] });
+            }
+        }
+    }
+
+    return respLines;
+}
+
+async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+    const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+        episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
+            episodeString
+            sourceUrls
+        }
+    }`;
+
+    try {
+        let apiData = null;
+
+        // v4.14.0: Try persisted query GET request first (bypasses captcha)
         try {
-          const arr = JSON.parse(plain[1]);
-          for (const s of arr) {
-            if (s.file) links.push({ url: s.file, label: s.label || 'auto', is_hls: s.file.includes('.m3u8') });
-          }
-        } catch {}
-      }
-    }
+            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
 
-    // HLS tracks array
-    const trackMatch = body.match(/"tracks"\s*:\s*(\[.*?\])/s);
-    if (trackMatch) {
-      try {
-        const tracks = JSON.parse(trackMatch[1]);
-        for (const t of tracks) {
-          if (t.file && t.kind !== 'thumbnails') {
-            links.push({ url: t.file, label: t.label || 'track', is_hls: t.file.includes('.m3u8') });
-          }
+            const getResp = await axios.get(apiUrl, {
+                headers: {
+                    'User-Agent': AGENT,
+                    'Referer': ALLANIME_REFR,
+                    'Origin': 'https://youtu-chan.com'
+                },
+                timeout: 5000
+            });
+
+            const rawText = JSON.stringify(getResp.data);
+            if (rawText && rawText.includes('tobeparsed')) {
+                apiData = getResp.data;
+            }
+        } catch (e) {
+            // GET request failed, will fall back to POST
         }
-      } catch {}
+
+        // Fallback: POST request (original method)
+        if (!apiData) {
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: {
+                    showId: showId,
+                    translationType: mode,
+                    episodeString: epNo
+                },
+                query: episodeEmbedGql
+            });
+            apiData = postResp.data;
+        }
+
+        // Check for NEED_CAPTCHA or other API-level errors
+        if (apiData.errors && apiData.errors.length > 0) {
+            const captchaErr = apiData.errors.find(e => e.message === 'NEED_CAPTCHA');
+            if (captchaErr) {
+                throw new Error('NEED_CAPTCHA: AllAnime API is currently requiring captcha verification. This is an upstream issue affecting all clients.');
+            }
+            throw new Error(`AllAnime API error: ${apiData.errors.map(e => e.message).join(', ')}`);
+        }
+
+        // Parse source lines from the API response
+        let respLines = parseSourceLines(apiData);
+
+        if (respLines.length === 0) return null;
+
+        // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4 (filemoon, new in v4.14.0)
+        const providerDefs = [
+            { name: 'Default', filemoon: false },
+            { name: 'Yt-mp4', filemoon: false },
+            { name: 'S-mp4', filemoon: false },
+            { name: 'Luf-Mp4', filemoon: false },
+            { name: 'Fm-mp4', filemoon: true }
+        ];
+
+        // Fetch all providers in parallel
+        const linkPromises = providerDefs.map(async (prov) => {
+            const entry = respLines.find(r => r.sourceName === prov.name);
+            if (!entry) return [];
+            const decodedPath = decodeProviderId(entry.hex);
+            if (!decodedPath) return [];
+
+            if (prov.filemoon) {
+                return getFilemoonLinks(decodedPath);
+            } else {
+                return getLinks(decodedPath);
+            }
+        });
+
+        const results = await Promise.all(linkPromises);
+        let allLinks = results.flat();
+
+        if (allLinks.length === 0) return null;
+
+        // Sort numerically descending (best first)
+        allLinks.sort((a, b) => {
+            const resA = parseInt(a.resolution) || 0;
+            const resB = parseInt(b.resolution) || 0;
+            return resB - resA;
+        });
+        // Debug: Log all available links and selection
+        console.log(`[Quality] Requested: ${quality} | Available:`, allLinks.map(l => `${l.resolution} → ${l.url.substring(0, 60)}...`));
+
+        let selected;
+        if (quality === 'best') {
+            selected = allLinks[0];
+        } else if (quality === 'worst') {
+            const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
+            selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[allLinks.length - 1];
+        } else {
+            const requestedRes = parseInt(quality) || 9999;
+            // Try exact match first
+            selected = allLinks.find(l => l.resolution.includes(quality));
+            if (!selected) {
+                // Find closest resolution at or below requested quality
+                const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
+                const atOrBelow = numeric.filter(l => parseInt(l.resolution) <= requestedRes);
+                if (atOrBelow.length > 0) {
+                    selected = atOrBelow[0];
+                } else {
+                    selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[0];
+                }
+            }
+        }
+
+        console.log(`[Quality] Selected: ${selected.resolution} → ${selected.url.substring(0, 80)}...`);
+
+        // Clean up double slashes in URL path (but not in https://)
+        let finalUrl = selected.url.replace(/([^:])\/\//g, '$1/');
+        return finalUrl;
+
+    } catch (e) {
+        console.error("Failed to get episode URL:", e.message);
+        // Re-throw NEED_CAPTCHA so callers can handle it appropriately
+        if (e.message && e.message.startsWith('NEED_CAPTCHA')) {
+            throw e;
+        }
+        return null;
     }
-  } catch {}
-  return links;
 }
 
-// ── FETCH SOURCES VIA SERVER ID ───────────────────────────────────────────────
+async function getEpisodeInfo(showId, epNo) {
+    const epNum = parseFloat(epNo);
+    const query = `query ($showId: String!, $epNum: Float!) {
+        episodeInfos( showId: $showId episodeNumStart: $epNum episodeNumEnd: $epNum ) {
+            episodeIdNum
+            notes
+            description
+            thumbnails
+        }
+    }`;
 
-async function fetchSourcesForServer(serverId) {
-  try {
-    const r = await withRetry(() =>
-      http.get(`${AJAX}/episode/sources`, { params: { id: serverId } })
-    );
-    const data = r.data;
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId, epNum },
+            query: query
+        });
 
-    // Direct link returned
-    if (data?.link || data?.url) {
-      const url = data.link || data.url;
-      return await fetchEmbedSources(url);
+        const infos = response.data.data.episodeInfos;
+        if (!infos || infos.length === 0) return null;
+
+        const info = infos[0];
+
+        // Format thumbnails (some are relative paths)
+        let thumbnails = info.thumbnails || [];
+        thumbnails = thumbnails.map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
+
+        return {
+            episode_no: info.episodeIdNum,
+            title: info.notes || '',
+            description: info.description || '',
+            thumbnails: thumbnails
+        };
+    } catch (e) {
+        return null;
     }
+}
 
-    // Embed iframe URL
-    if (data?.iframe) return await fetchEmbedSources(data.iframe);
+async function getAvailableQualities(showId, epNo, mode = 'sub') {
+    try {
+        let apiData = null;
 
-    // Sources array returned directly
-    if (Array.isArray(data?.sources)) {
-      return data.sources.map(s => ({
-        url:    s.file || s.url || '',
-        label:  s.label || 'auto',
-        is_hls: (s.file||'').includes('.m3u8'),
-      })).filter(s => s.url);
+        try {
+            const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epNo });
+            const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
+            const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
+
+            const getResp = await axios.get(apiUrl, {
+                headers: { 'User-Agent': AGENT, 'Referer': ALLANIME_REFR, 'Origin': 'https://youtu-chan.com' },
+                timeout: 5000
+            });
+            const rawText = JSON.stringify(getResp.data);
+            if (rawText && rawText.includes('tobeparsed')) apiData = getResp.data;
+        } catch (e) { /* fallback to POST */ }
+
+        if (!apiData) {
+            const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+                episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }
+            }`;
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: { showId, translationType: mode, episodeString: epNo },
+                query: episodeEmbedGql
+            });
+            apiData = postResp.data;
+        }
+
+        if (apiData.errors && apiData.errors.length > 0) return [];
+
+        let respLines = parseSourceLines(apiData);
+        if (respLines.length === 0) return [];
+
+        const providerDefs = [
+            { name: 'Default', filemoon: false },
+            { name: 'Yt-mp4', filemoon: false },
+            { name: 'S-mp4', filemoon: false },
+            { name: 'Luf-Mp4', filemoon: false },
+            { name: 'Fm-mp4', filemoon: true }
+        ];
+
+        const linkPromises = providerDefs.map(async (prov) => {
+            const entry = respLines.find(r => r.sourceName === prov.name);
+            if (!entry) return [];
+            const decodedPath = decodeProviderId(entry.hex);
+            if (!decodedPath) return [];
+            if (prov.filemoon) return getFilemoonLinks(decodedPath);
+            return getLinks(decodedPath);
+        });
+
+        const results = await Promise.all(linkPromises);
+        let allLinks = results.flat();
+        if (allLinks.length === 0) return [];
+
+        // Extract unique resolutions
+        const resolutions = [...new Set(allLinks.map(l => l.resolution))];
+        return resolutions;
+    } catch (e) {
+        return [];
     }
-  } catch {}
-  return [];
-}
-
-// ── getAllEpisodeLinks ─────────────────────────────────────────────────────────
-
-async function getAllEpisodeLinks(malId, epNo, mode = 'sub', quality = 'best', title = null) {
-  const resolved = await resolveKaiId(malId, title);
-  if (!resolved) return [];
-
-  // Get episode list → find matching episode
-  const epList = await getEpisodesList(malId, mode, title);
-  const target  = epList.find(e => Math.abs(e.number - parseFloat(epNo)) < 0.01)
-                || epList.find(e => e.number === Math.round(parseFloat(epNo)));
-
-  if (!target) return [];
-
-  // Get servers for this episode
-  const servers = await getEpisodeServers(target.id);
-  if (!servers.length) return [];
-
-  // Preferred server order: megacloud → rapidcloud → streamsb → streamtape
-  const PREF = ['megacloud','rapidcloud','hd-1','hd-2','vidcloud','streamtape','mp4upload'];
-  servers.sort((a, b) => {
-    const ai = PREF.findIndex(p => a.name.toLowerCase().includes(p));
-    const bi = PREF.findIndex(p => b.name.toLowerCase().includes(p));
-    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
-  });
-
-  let allLinks = [];
-  for (const server of servers.slice(0, 4)) { // try up to 4 servers
-    const links = await fetchSourcesForServer(server.id);
-    if (links.length) { allLinks = [...allLinks, ...links]; }
-    if (allLinks.length >= 2) break; // have enough, stop
-  }
-
-  if (!allLinks.length) return [];
-
-  // Sort: HLS first, then by quality label desc
-  allLinks.sort((a, b) => {
-    const qa = parseInt(a.label) || 0;
-    const qb = parseInt(b.label) || 0;
-    return qb - qa;
-  });
-
-  if (quality === 'worst') allLinks.reverse();
-  else if (quality !== 'best') {
-    const q = parseInt(quality) || 9999;
-    const match = allLinks.find(l => String(l.label).includes(quality));
-    if (match) allLinks = [match, ...allLinks.filter(l => l !== match)];
-    else {
-      const below = allLinks.filter(l => parseInt(l.label) <= q);
-      if (below.length) allLinks = [below[0], ...allLinks.filter(l => l !== below[0])];
-    }
-  }
-
-  return allLinks.map(l => ({
-    url:        l.url,
-    resolution: String(l.label),
-    is_hls:     !!l.is_hls,
-  }));
-}
-
-// ── PUBLIC API ────────────────────────────────────────────────────────────────
-
-async function getEpisodeUrl(malId, epNo, mode = 'sub', quality = 'best', title = null) {
-  const links = await getAllEpisodeLinks(malId, epNo, mode, quality, title);
-  return links.length ? links[0].url : null;
-}
-
-async function getAvailableQualities(malId, epNo, mode = 'sub', title = null) {
-  const links = await getAllEpisodeLinks(malId, epNo, mode, 'best', title);
-  return [...new Set(links.map(l => l.resolution))];
-}
-
-async function dubCheck(malId, title = null) {
-  const resolved = await resolveKaiId(malId, title);
-  if (!resolved) return { has_dub: false, episodes_dub: 0 };
-  try {
-    const r = await withRetry(() => http.get(`/watch/${resolved.slug}`));
-    const $ = cheerio.load(r.data);
-    const dubText = $('.item-title:contains("Dub") .name').text().trim();
-    const eps_dub = parseInt(dubText) || 0;
-    return { has_dub: eps_dub > 0, episodes_dub: eps_dub };
-  } catch { return { has_dub: false, episodes_dub: 0 }; }
 }
 
 module.exports = {
-  searchAnime,
-  getAnimeDetails,
-  getEpisodesList,
-  getEpisodeUrl,
-  getAllEpisodeLinks,
-  getAvailableQualities,
-  dubCheck,
-  resolveKaiId,
+    searchAnime,
+    getAnimeDetails,
+    getEpisodesList,
+    getEpisodeUrl,
+    getEpisodeInfo,
+    getAvailableQualities
 };
