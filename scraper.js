@@ -368,48 +368,21 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
 
     for (const epString of episodeFormats) {
         try {
-            // Try GET first
-            try {
-                const queryVars = JSON.stringify({ showId, translationType: mode, episodeString: epString });
-                const queryExt = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
-                const apiUrl = `${ALLANIME_API}/api?variables=${encodeURIComponent(queryVars)}&extensions=${encodeURIComponent(queryExt)}`;
-
-                const getResp = await axios.get(apiUrl, {
-                    headers: {
-                        'User-Agent': AGENT,
-                        'Referer': ALLANIME_REFR,
-                        'Origin': 'https://youtu-chan.com'
-                    },
-                    timeout: 6000
-                });
-
-                const rawText = JSON.stringify(getResp.data);
-                if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls'))) {
-                    apiData = getResp.data;
-                    console.log(`[Episode] Format matched: "${epString}" (GET)`);
-                    break;
-                }
-            } catch (e) {
-                // GET failed, try POST
-            }
-
-            // Fallback: POST request
-            if (!apiData) {
-                const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
-                    variables: {
-                        showId: showId,
-                        translationType: mode,
-                        episodeString: epString
-                    },
-                    query: episodeEmbedGql
-                });
-                
-                const rawText = JSON.stringify(postResp.data);
-                if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls'))) {
-                    apiData = postResp.data;
-                    console.log(`[Episode] Format matched: "${epString}" (POST)`);
-                    break;
-                }
+            // POST request to get episode data
+            const postResp = await executeWithLimit(async () => axiosInstance.post(`${ALLANIME_API}/api`, {
+                variables: {
+                    showId: showId,
+                    translationType: mode,
+                    episodeString: epString
+                },
+                query: episodeEmbedGql
+            }, { timeout: 10000 }));
+            
+            const rawText = JSON.stringify(postResp.data);
+            if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls'))) {
+                apiData = postResp.data;
+                console.log(`[Episode] Found: ep=${epString}, mode=${mode}`);
+                break;
             }
         } catch (e) {
             continue;
@@ -417,21 +390,23 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
     }
 
     if (!apiData) {
-        throw new Error('No valid episode format found');
+        console.log(`[Episode] No data found for ${showId} ep${epNo} ${mode}`);
+        return null;
     }
 
     // Check for NEED_CAPTCHA or other errors
     if (apiData.errors && apiData.errors.length > 0) {
-        const captchaErr = apiData.errors.find(e => e.message === 'NEED_CAPTCHA');
-        if (captchaErr) {
-            throw new Error('NEED_CAPTCHA: AllAnime API is currently requiring captcha verification. This is an upstream issue affecting all clients.');
-        }
-        throw new Error(`AllAnime API error: ${apiData.errors.map(e => e.message).join(', ')}`);
+        const err = apiData.errors[0].message || 'Unknown error';
+        console.log(`[Episode] API error: ${err}`);
+        return null;
     }
 
     let respLines = parseSourceLines(apiData);
 
-    if (respLines.length === 0) return null;
+    if (respLines.length === 0) {
+        console.log(`[Episode] No sources found`);
+        return null;
+    }
 
     // Provider order: 1=Default, 2=Yt-mp4, 3=S-mp4, 4=Luf-Mp4, 5=Fm-mp4
     const providerDefs = [
@@ -442,62 +417,42 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
         { name: 'Fm-mp4', filemoon: true }
     ];
 
-    // Fetch all providers in parallel with timeout fallback
-    const linkPromises = providerDefs.map(async (prov) => {
+    // Try each provider
+    for (const prov of providerDefs) {
         const entry = respLines.find(r => r.sourceName === prov.name);
-        if (!entry) return [];
+        if (!entry) continue;
+        
         const decodedPath = decodeProviderId(entry.hex);
-        if (!decodedPath) return [];
+        if (!decodedPath) continue;
 
         try {
+            let links = [];
             if (prov.filemoon) {
-                return await getFilemoonLinks(decodedPath);
+                links = await getFilemoonLinks(decodedPath);
             } else {
-                return await getLinks(decodedPath);
+                links = await getLinks(decodedPath);
+            }
+            
+            if (links.length > 0) {
+                // Sort by quality
+                links.sort((a, b) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
+                
+                if (quality === 'best') {
+                    return links[0].url;
+                } else if (quality === 'worst') {
+                    return links[links.length - 1].url;
+                } else {
+                    const match = links.find(l => l.resolution === quality);
+                    return match ? match.url : links[0].url;
+                }
             }
         } catch (e) {
-            return [];
-        }
-    });
-
-    const results = await Promise.all(linkPromises);
-    let allLinks = results.flat();
-
-    if (allLinks.length === 0) return null;
-
-    // Sort numerically descending
-    allLinks.sort((a, b) => {
-        const resA = parseInt(a.resolution) || 0;
-        const resB = parseInt(b.resolution) || 0;
-        return resB - resA;
-    });
-
-    console.log(`[Quality] Requested: ${quality} | Available:`, allLinks.map(l => `${l.resolution}`));
-
-    let selected;
-    if (quality === 'best') {
-        selected = allLinks[0];
-    } else if (quality === 'worst') {
-        const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
-        selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[allLinks.length - 1];
-    } else {
-        const requestedRes = parseInt(quality) || 9999;
-        selected = allLinks.find(l => l.resolution.includes(quality));
-        if (!selected) {
-            const numeric = allLinks.filter(l => /^\d+/.test(l.resolution));
-            const atOrBelow = numeric.filter(l => parseInt(l.resolution) <= requestedRes);
-            if (atOrBelow.length > 0) {
-                selected = atOrBelow[0];
-            } else {
-                selected = numeric.length > 0 ? numeric[numeric.length - 1] : allLinks[0];
-            }
+            continue;
         }
     }
 
-    console.log(`[Quality] Selected: ${selected.resolution}`);
-
-    let finalUrl = selected.url.replace(/([^:])\/\//g, '$1/');
-    return finalUrl;
+    console.log(`[Episode] No playable links found`);
+    return null;
 }
 
 async function getEpisodeInfo(showId, epNo) {
