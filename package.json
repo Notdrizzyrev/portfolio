@@ -1,20 +1,22 @@
 {
   "name": "allanime-api",
-  "version": "3.0.0",
-  "description": "⚡ TURBO FAST Anime API - Multi-level caching, connection pooling, gzip compression",
+  "version": "2.0.0",
+  "description": "Fast Node.js API to search anime, get episodes, and stream videos from Allanime.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": ["anime", "api", "allanime", "streaming", "fast", "cache"],
+  "keywords": ["anime", "api", "allanime", "streaming"],
   "author": "mdtahseen7",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.15.2",
-    "compression": "^1.7.4",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
   }
 }
