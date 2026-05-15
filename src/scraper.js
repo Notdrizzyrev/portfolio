@@ -1,13 +1,11 @@
 /**
- * AnimeVault Scraper v7.1 — AllAnime Edition (title-aware + progressive fallback)
+ * AnimeVault Scraper v7.2 — AllAnime Edition (title-aware + progressive fallback)
  *
- * Uses AllAnime (allanime.day) directly — no Consumet dependency.
- * Accepts both AllAnime internal IDs AND plain titles as show_id,
- * so the new frontend (which passes titles) works out of the box.
- *
- * v7.1 change: resolveShowId() now tries progressively cleaner/shorter
- * versions of the title when the full query returns 0 results, fixing
- * shows like "Re:ZERO -Starting Life in Another World- Season 4".
+ * v7.2 fix: lowered bestScore threshold from 25 → 15 so MAL titles that score
+ * just below the old cutoff (e.g. "Re:ZERO -Starting Life..." vs AllAnime's
+ * "Re Zero Starting Life...") still resolve correctly.
+ * titleScore() also now strips special chars before word-overlap so punctuation
+ * differences don't torpedo the score.
  */
 
 const axios = require('axios');
@@ -21,7 +19,6 @@ const ALLANIME_BASE = 'allanime.day';
 const ALLANIME_API  = `https://api.${ALLANIME_BASE}`;
 const ALLANIME_KEY  = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest('hex');
 
-// Persisted query hash for episode embeds (from ani-cli)
 const EPISODE_QUERY_HASH = 'd405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec';
 
 const axiosInstance = axios.create({
@@ -90,72 +87,64 @@ function normTitle(s) {
     .replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * v7.2: also strip ALL special chars (not just colons/dashes) before word-overlap
+ * so "Re:ZERO" vs "Re Zero" get full word credit instead of 0.
+ */
 function titleScore(a, b) {
   const na = normTitle(a), nb = normTitle(b);
   if (!na || !nb) return 0;
   if (na === nb) return 100;
   if (na.replace(/\s/g, '') === nb.replace(/\s/g, '')) return 95;
   if (na.includes(nb) || nb.includes(na)) return 82;
+
   const wa = new Set(na.split(' ').filter(w => w.length > 1));
   const wb = nb.split(' ').filter(w => w.length > 1);
   const overlap = wb.filter(w => wa.has(w)).length;
   if (!overlap) return 0;
-  return Math.round(overlap / Math.max(wa.size, wb.length) * 65);
+  const ratio = overlap / Math.max(wa.size, wb.length);
+  // Boost: if every word in the shorter title appears in the longer one → 70+
+  const shorter = wa.size <= wb.length ? [...wa] : wb;
+  const allMatch = shorter.every(w => (wa.size <= wb.length ? wb.includes(w) : wa.has(w)));
+  if (allMatch) return Math.round(70 + ratio * 25);
+  return Math.round(ratio * 65);
 }
 
 // ── PROGRESSIVE TITLE FALLBACKS ───────────────────────────────────────────────
-//
-// Given a raw title like "Re:ZERO -Starting Life in Another World- Season 4",
-// produce a list of progressively simpler queries to try until one gets hits:
-//
-//   1. Original title (as-is)
-//   2. Strip trailing season/part/cour/arc suffixes  → "Re:ZERO -Starting Life in Another World-"
-//   3. Strip decorative dashes / sub-titles          → "Re:ZERO"
-//   4. Replace special chars with spaces, collapse   → "ReZERO Starting Life in Another World"
-//   5. First 4 significant words                     → "ReZERO Starting Life Another"
-//   6. Everything before the first colon or dash     → "ReZERO"
 
 function titleFallbacks(raw) {
   if (!raw) return [];
   const seen = new Set();
+  const results = [];
   const add = (s) => {
     const t = (s || '').trim();
     if (t && !seen.has(t)) { seen.add(t); results.push(t); }
   };
-  const results = [];
 
   // 1. Original
   add(raw);
 
-  // 2. Strip trailing season/part/cour/arc/OVA/Special suffixes (case-insensitive)
-  const noSuffix = raw.replace(/\s*[\-–:]?\s*(season|part|cour|arc|ova|special|movie|film|chapter)\s*\d*\s*$/i, '').trim();
-  add(noSuffix);
+  // 2. Strip trailing season/part/cour/arc/OVA/Special suffixes
+  add(raw.replace(/\s*[\-–:]?\s*(season|part|cour|arc|ova|special|movie|film|chapter)\s*\d*\s*$/i, '').trim());
 
-  // 3. Strip content inside or after decorative dashes like " -Subtitle Here-"
-  //    e.g. "Re:ZERO -Starting Life in Another World-" → "Re:ZERO"
+  // 3. Strip decorative dashes like " -Subtitle Here-"
   const noDashSub = raw
-    .replace(/\s+[-–]\s+[^-–]+[-–]?\s*$/i, '')   // trailing " - Subtitle -"
-    .replace(/\s+[-–][^-–]+[-–]\s*$/i, '')         // trailing " -Subtitle-"
+    .replace(/\s+[-–]\s+[^-–]+[-–]?\s*$/i, '')
+    .replace(/\s+[-–][^-–]+[-–]\s*$/i, '')
     .trim();
   add(noDashSub);
-
-  // Also try stripping the season suffix from the dash-stripped version
   add(noDashSub.replace(/\s*(season|part|cour|arc)\s*\d*\s*$/i, '').trim());
 
   // 4. Replace all special chars with spaces
-  const cleaned = raw
-    .replace(/[:\-–!?'"]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const cleaned = raw.replace(/[:\-–!?'"]/g, ' ').replace(/\s+/g, ' ').trim();
   add(cleaned);
 
-  // 5. First 4 significant words of the cleaned version
+  // 5. First 4 significant words of cleaned version
   const words = cleaned.split(' ').filter(w => w.length > 1);
   if (words.length > 4) add(words.slice(0, 4).join(' '));
 
-  // 6. Everything before the first colon or long dash in the original
-  const beforeColon = raw.split(/[:\-–]/)[0].trim();
-  add(beforeColon);
+  // 6. Everything before the first colon or long dash
+  add(raw.split(/[:\-–]/)[0].trim());
 
   return results;
 }
@@ -165,28 +154,22 @@ function titleFallbacks(raw) {
 const _idCache = new Map();
 
 /**
- * Accepts either:
- *  - A real AllAnime ID  (alphanumeric, no spaces)  → used directly
- *  - A title string                                  → searched on AllAnime
- *    If the full title returns no results, progressively simpler queries
- *    are tried until one succeeds or all are exhausted.
+ * v7.2: threshold lowered from 25 → 15 so near-miss MAL/AllAnime title pairs
+ * (different punctuation, romanisation etc.) still resolve correctly.
  */
 async function resolveShowId(showId, title = null) {
   const cacheKey = title ? `${showId}::${title}` : showId;
   if (_idCache.has(cacheKey)) return _idCache.get(cacheKey);
 
-  // Looks like a proper AllAnime internal ID — use directly
   const looksLikeId = /^[a-zA-Z0-9]{8,30}$/.test(showId) && !showId.includes(' ');
   if (looksLikeId) {
     _idCache.set(cacheKey, showId);
     return showId;
   }
 
-  // Build the list of queries to try in order
   const primaryQuery = title || showId;
   const queries = titleFallbacks(primaryQuery);
 
-  // If we also have a separate title arg, include its fallbacks too (deduplicated)
   if (title && title !== showId) {
     for (const fb of titleFallbacks(showId)) {
       if (!queries.includes(fb)) queries.push(fb);
@@ -199,7 +182,6 @@ async function resolveShowId(showId, title = null) {
     const results = await searchAnime(query);
     if (!results.length) continue;
 
-    // Score each result against BOTH the original showId and the passed title
     for (const r of results) {
       const s = Math.max(
         titleScore(r.title || '', showId),
@@ -209,11 +191,12 @@ async function resolveShowId(showId, title = null) {
       if (s > bestScore) { bestScore = s; best = r; }
     }
 
-    // Good enough match found — stop trying fallbacks
+    // Good enough — stop early
     if (bestScore >= 75) break;
   }
 
-  if (!best || bestScore < 25) return null;
+  // ▼ v7.2: lowered from 25 → 15
+  if (!best || bestScore < 15) return null;
 
   _idCache.set(cacheKey, best.id);
   if (title) _idCache.set(title, best.id);
@@ -361,7 +344,6 @@ async function fetchEpisodeSources(showId, epNo, mode = 'sub') {
 
   let apiData = null;
 
-  // Try persisted-query GET first (faster, bypasses captcha)
   try {
     const vars = JSON.stringify({ showId, translationType: mode, episodeString: String(epNo) });
     const ext  = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_QUERY_HASH } });
@@ -495,14 +477,12 @@ async function getAllEpisodeLinks(showId, epNo, mode = 'sub', quality = 'best', 
   let allLinks = await resolveAllLinks(respLines);
   if (!allLinks.length) return [];
 
-  // Sort: non-HLS (MP4) first, then by resolution descending
   allLinks.sort((a, b) => {
     const aHls = a.is_hls ? 1 : 0, bHls = b.is_hls ? 1 : 0;
     if (aHls !== bHls) return aHls - bHls;
     return (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0);
   });
 
-  // Apply quality preference
   if (quality === 'worst') {
     allLinks.reverse();
   } else if (quality !== 'best') {
