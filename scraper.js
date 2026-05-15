@@ -368,35 +368,36 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
 
     for (const epString of episodeFormats) {
         try {
-            // POST request to get episode data
-            const postResp = await executeWithLimit(async () => axiosInstance.post(`${ALLANIME_API}/api`, {
+            // POST request to get episode data  
+            const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
                 variables: {
                     showId: showId,
                     translationType: mode,
                     episodeString: epString
                 },
                 query: episodeEmbedGql
-            }, { timeout: 10000 }));
+            });
             
             const rawText = JSON.stringify(postResp.data);
             if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls'))) {
                 apiData = postResp.data;
-                console.log(`[Episode] Found: ep=${epString}, mode=${mode}`);
+                console.log(`[Episode] Got data for ep=${epString}`);
                 break;
             }
         } catch (e) {
+            console.log(`[Episode] Format ${epString} failed: ${e.message}`);
             continue;
         }
     }
 
     if (!apiData) {
-        console.log(`[Episode] No data found for ${showId} ep${epNo} ${mode}`);
+        console.log(`[Episode] No API data found for ${showId} ep${epNo} ${mode}`);
         return null;
     }
 
     // Check for NEED_CAPTCHA or other errors
     if (apiData.errors && apiData.errors.length > 0) {
-        const err = apiData.errors[0].message || 'Unknown error';
+        const err = apiData.errors[0]?.message || 'Unknown API error';
         console.log(`[Episode] API error: ${err}`);
         return null;
     }
@@ -447,7 +448,21 @@ async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
                 }
             }
         } catch (e) {
+            console.log(`[Episode] Provider ${prov.name} failed:`, e.message);
             continue;
+        }
+    }
+
+    // Fallback: Try direct extraction from sourceUrls if available
+    if (apiData.data?.episode?.sourceUrls) {
+        const sourceUrls = apiData.data.episode.sourceUrls;
+        if (typeof sourceUrls === 'string' && sourceUrls.length > 0) {
+            // Try to extract direct URLs
+            const urlMatch = sourceUrls.match(/https?:\/\/[^\s"'<>]+/);
+            if (urlMatch) {
+                console.log(`[Episode] Using direct URL from sourceUrls`);
+                return urlMatch[0];
+            }
         }
     }
 
