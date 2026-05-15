@@ -6,6 +6,12 @@ const scraper = require('./scraper');
 
 const app = express();
 const PORT = process.env.PORT || 5678;
+const SELF = process.env.SELF_URL || `http://localhost:${PORT}`;
+
+const VIDEO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+  'Referer': 'https://allmanga.to'
+};
 
 // Episode cache: { "showId:mode": [episodes], timestamp: Date }
 const episodeCache = new Map();
@@ -128,10 +134,7 @@ app.get('/play', async (req, res) => {
         if (!url) return res.status(404).json({ error: "Episode not found or URL not available" });
 
         const range = req.headers.range;
-        const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-            'Referer': 'https://allmanga.to'
-        };
+        const headers = { ...VIDEO_HEADERS };
         if (range) {
             headers['Range'] = range;
         }
@@ -174,18 +177,30 @@ app.get('/play', async (req, res) => {
 });
 
 app.get('/qualities', async (req, res) => {
-    const id = req.query.show_id;
-    const epNo = req.query.ep_no;
-    const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
+  const { show_id, ep_no, mode: rawMode } = req.query;
+  const mode = rawMode === 'dub' ? 'dub' : 'sub';
+  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+  try {
+    const qs = await scraper.getAvailableQualities(show_id, ep_no, mode);
+    res.json({ qualities: qs });
+  } catch (e) {
+    res.status(500).json({ error: e.message, qualities: [] });
+  }
+});
 
-    if (!id || !epNo) return res.status(400).json({ error: "Missing show_id or ep_no" });
-
+app.post('/thumbnails', async (req, res) => {
+  const ids = req.body?.ids || req.body?.mal_ids;
+  if (!ids || !Array.isArray(ids)) {
+    return res.status(400).json({ error: "Missing 'ids' array in request body" });
+  }
+  const results = {};
+  for (const id of ids) {
     try {
-        const qualities = await scraper.getAvailableQualities(id, epNo, mode);
-        res.json({ qualities });
-    } catch (e) {
-        res.status(500).json({ error: e.message, qualities: [] });
-    }
+      const details = await scraper.getAnimeDetails(id);
+      if (details?.thumbnail_url) results[id] = details.thumbnail_url;
+    } catch {}
+  }
+  res.json(results);
 });
 
 app.get('/episode_info', async (req, res) => {
@@ -203,47 +218,54 @@ app.get('/episode_info', async (req, res) => {
     }
 });
 
-app.post('/thumbnails', async (req, res) => {
-    try {
-        const { ids } = req.body;
-        const inputIds = ids || req.body.mal_ids;
+app.get('/hls-proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing url' });
 
-        if (!inputIds || !Array.isArray(inputIds)) {
-            return res.status(400).json({ error: "Missing 'ids' list in request body" });
-        }
+  try {
+    const decoded = decodeURIComponent(url);
+    const headers = { ...VIDEO_HEADERS };
 
-        const results = {};
-
-        for (const id of inputIds) {
-            try {
-                const details = await scraper.getAnimeDetails(id);
-                if (details && details.thumbnail_url) {
-                    results[id] = details.thumbnail_url;
-                }
-            } catch (err) {
-                // Ignore individual failures
-            }
-        }
-
-        res.json(results);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
+    if (decoded.includes('gogoanime') || decoded.includes('playtaku')) {
+      headers['Referer'] = 'https://gogoanime.cl/';
+      headers['Origin']  = 'https://gogoanime.cl';
+    } else if (decoded.includes('megacloud') || decoded.includes('rapidcloud')) {
+      headers['Referer'] = 'https://megacloud.tv/';
+      headers['Origin']  = 'https://megacloud.tv';
     }
+
+    const segResp = await axios.get(decoded, {
+      headers,
+      responseType: 'stream',
+      timeout:      15000,
+      maxRedirects: 3,
+    });
+
+    res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
+    res.setHeader('Content-Type', segResp.headers['content-type'] || 'video/mp2t');
+    segResp.data.pipe(res);
+    res.on('close', () => segResp.data.destroy());
+  } catch (e) {
+    console.warn('[HLS-proxy] Failed:', e.message);
+    if (!res.headersSent) res.status(502).json({ error: e.message });
+  }
+});
+
+app.options('/play', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin',  req.headers['origin'] || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.sendStatus(204);
 });
 
 app.get('/', (req, res) => {
     res.json({
-        title: "Anime API (Node.js)",
+        title: "AnimeVault API (Node.js)",
         status: "running",
-        source: "Allanime Direct",
+        source: "AllAnime Direct",
         version: "2.0 (Fixed)",
-        fixes: [
-            "Episode string formatting for new anime (tries 1, 1.0, 01 formats)",
-            "Flexible provider regex (handles sourceUrl/sourceName in any order)",
-            "Increased timeouts (7s per provider, 8s per request)",
-            "Episode list caching (1 hour TTL)",
-            "Better error handling for NEED_CAPTCHA"
-        ],
+        self_url: SELF,
         available_endpoints: [
             "/search?query=<query>",
             "/anime/<id>",
@@ -252,11 +274,67 @@ app.get('/', (req, res) => {
             "/episode_info?show_id=<id>&ep_no=<ep_no>",
             "/episode_url?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub>",
             "/play?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub>",
-            "/qualities?show_id=<id>&ep_no=<ep_no>&mode=<sub|dub>"
+            "/qualities?show_id=<id>&ep_no=<ep_no>&mode=<sub|dub>",
+            "/hls-proxy?url=<encoded_url>"
         ]
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT} using Allanime Direct Mode (v2.0 Fixed)`);
+  console.log(`✅ AnimeVault backend running on port ${PORT}`);
+  console.log(`   Self URL (for HLS rewriting): ${SELF}`);
+  console.log(`   Source: AllAnime (allanime.day)`);
+});ata.pipe(res);
+    res.on('close', () => segResp.data.destroy());
+  } catch (e) {
+    console.warn('[HLS-proxy] Failed:', e.message);
+    if (!res.headersSent) res.status(502).json({ error: e.message });
+  }
+});
+
+app.options('/play', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin',  req.headers['origin'] || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.sendStatus(204);
+});
+
+// ── QUALITIES ─────────────────────────────────────────────────────────────────
+
+app.get('/qualities', async (req, res) => {
+  const { show_id, ep_no, mode: rawMode, title } = req.query;
+  const mode = rawMode === 'dub' ? 'dub' : 'sub';
+  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
+  try {
+    const qs = await scraper.getAvailableQualities(show_id, ep_no, mode, title || null);
+    res.json({ qualities: qs });
+  } catch (e) {
+    res.status(500).json({ error: e.message, qualities: [] });
+  }
+});
+
+// ── THUMBNAILS ────────────────────────────────────────────────────────────────
+
+app.post('/thumbnails', async (req, res) => {
+  const ids = req.body?.ids || req.body?.mal_ids;
+  if (!ids || !Array.isArray(ids)) {
+    return res.status(400).json({ error: "Missing 'ids' array in request body" });
+  }
+  const results = {};
+  for (const id of ids) {
+    try {
+      const details = await scraper.getAnimeDetails(id);
+      if (details?.thumbnail_url) results[id] = details.thumbnail_url;
+    } catch {}
+  }
+  res.json(results);
+});
+
+// ── START ─────────────────────────────────────────────────────────────────────
+
+app.listen(PORT, () => {
+  console.log(`✅ AnimeVault backend v8.0 running on port ${PORT}`);
+  console.log(`   Self URL (for HLS rewriting): ${SELF}`);
+  console.log(`   Source: AnimeKai (animekai.to)`);
 });
