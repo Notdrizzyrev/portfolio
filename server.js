@@ -40,6 +40,22 @@ app.get('/anime/:id', async (req, res) => {
     }
 });
 
+app.get('/dub-check', async (req, res) => {
+    const { show_id } = req.query;
+    if (!show_id) return res.status(400).json({ error: "Missing show_id" });
+
+    try {
+        const details = await scraper.getAnimeDetails(show_id);
+        if (!details) return res.status(404).json({ error: "Anime not found", has_dub: false, episodes_dub: 0 });
+        res.json({
+            has_dub: (details.episodes_dub || 0) > 0,
+            episodes_dub: details.episodes_dub || 0
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message, has_dub: false, episodes_dub: 0 });
+    }
+});
+
 app.get('/episodes/:id', async (req, res) => {
     const id = req.params.id;
     const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
