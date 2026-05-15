@@ -1,3 +1,4 @@
+
 /**
  * AnimeVault Scraper v7.2 — AllAnime Edition (title-aware + progressive fallback)
  *
