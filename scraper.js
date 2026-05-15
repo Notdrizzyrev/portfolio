@@ -15,8 +15,30 @@ const axiosInstance = axios.create({
         'User-Agent': AGENT,
         'Referer': ALLANIME_REFR
     },
-    timeout: 8000
+    timeout: 15000,
+    maxRedirects: 5,
+    httpAgent: require('http').globalAgent,
+    httpsAgent: require('https').globalAgent
 });
+
+// Request concurrency limiter
+let activeRequests = 0;
+const MAX_CONCURRENT = 10;
+const requestQueue = [];
+
+async function executeWithLimit(fn) {
+    while (activeRequests >= MAX_CONCURRENT) {
+        await new Promise(r => requestQueue.push(r));
+    }
+    activeRequests++;
+    try {
+        return await fn();
+    } finally {
+        activeRequests--;
+        const next = requestQueue.shift();
+        if (next) next();
+    }
+}
 
 function decrypt(blob) {
     try {
@@ -173,28 +195,29 @@ async function searchAnime(query) {
     }`;
 
     try {
-        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+        const response = await executeWithLimit(async () => axiosInstance.post(`${ALLANIME_API}/api`, {
             variables: {
                 search: {
                     allowAdult: false,
                     allowUnknown: false,
                     query: query
                 },
-                limit: 40,
+                limit: 20,
                 page: 1,
                 countryOrigin: "ALL"
             },
             query: searchGql
-        });
+        }, { timeout: 12000 }));
 
-        const shows = response.data.data.shows.edges;
-        return shows.map(show => ({
+        const shows = response.data.data.shows.edges || [];
+        return shows.slice(0, 15).map(show => ({
             id: show._id,
             title: show.englishName || show.name.replace(/\\"/g, '"'),
             episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
             episodes_dub: parseInt(show.availableEpisodes.dub) || 0
         }));
     } catch (e) {
+        console.error('Search error:', e.message);
         return [];
     }
 }
