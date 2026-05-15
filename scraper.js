@@ -611,32 +611,3 @@ module.exports = {
     getEpisodeInfo,
     getAvailableQualities
 };
-== prov.name);
-            if (!entry) return [];
-            const decodedPath = decodeProviderId(entry.hex);
-            if (!decodedPath) return [];
-            try {
-                if (prov.filemoon) return await getFilemoonLinks(decodedPath);
-                return await getLinks(decodedPath);
-            } catch (e) { return []; }
-        });
-
-        const results = await Promise.all(linkPromises);
-        let allLinks = results.flat();
-        if (allLinks.length === 0) return [];
-
-        const resolutions = [...new Set(allLinks.map(l => l.resolution))];
-        return resolutions;
-    } catch (e) {
-        return [];
-    }
-}
-
-module.exports = {
-    searchAnime,
-    getAnimeDetails,
-    getEpisodesList,
-    getEpisodeUrl,
-    getEpisodeInfo,
-    getAvailableQualities
-};
