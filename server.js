@@ -7,8 +7,27 @@ const scraper = require('./scraper');
 const app = express();
 const PORT = process.env.PORT || 5678;
 
+// Episode cache: { "showId:mode": [episodes], timestamp: Date }
+const episodeCache = new Map();
+const CACHE_TTL = 3600000; // 1 hour
+
 app.use(cors());
 app.use(express.json());
+
+// Cache helper
+function getCachedEpisodes(showId, mode) {
+    const key = `${showId}:${mode}`;
+    const cached = episodeCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.episodes;
+    }
+    return null;
+}
+
+function setCachedEpisodes(showId, mode, episodes) {
+    const key = `${showId}:${mode}`;
+    episodeCache.set(key, { episodes, timestamp: Date.now() });
+}
 
 // Routes
 app.get('/search', async (req, res) => {
@@ -63,7 +82,14 @@ app.get('/episodes/:id', async (req, res) => {
     if (!id) return res.status(400).json({ error: "Missing ID" });
 
     try {
-        const episodes = await scraper.getEpisodesList(id, mode);
+        // Check cache first
+        let episodes = getCachedEpisodes(id, mode);
+        if (!episodes) {
+            episodes = await scraper.getEpisodesList(id, mode);
+            if (episodes.length > 0) {
+                setCachedEpisodes(id, mode, episodes);
+            }
+        }
         res.json({ mode, episodes });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -83,14 +109,12 @@ app.get('/episode_url', async (req, res) => {
         if (!url) return res.status(404).json({ error: "Episode not found or URL not available" });
         res.json({ episode_url: url, mode });
     } catch (e) {
-        const status = e.message && e.message.startsWith('NEED_CAPTCHA') ? 503 : 500;
+        const status = e.message && e.message.includes('NEED_CAPTCHA') ? 503 : 500;
         res.status(status).json({ error: e.message });
     }
 });
 
-// Proxy endpoint: streams the video through the API with proper headers
-// Usage: /play?show_id=<id>&ep_no=<num>&mode=<sub|dub>&quality=<best|worst|1080p|etc>
-// Can be opened directly in browser, VLC, or any video player
+// Stream endpoint with proper headers for all video players
 app.get('/play', async (req, res) => {
     const id = req.query.show_id;
     const epNo = req.query.ep_no;
@@ -103,7 +127,6 @@ app.get('/play', async (req, res) => {
         const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
         if (!url) return res.status(404).json({ error: "Episode not found or URL not available" });
 
-        // Stream the video through our server with proper headers
         const range = req.headers.range;
         const headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
@@ -119,7 +142,6 @@ app.get('/play', async (req, res) => {
             timeout: 15000
         });
 
-        // Forward relevant headers, force video/mp4 so browsers play inline
         res.setHeader('Content-Type', 'video/mp4');
         if (req.query.download === '1') {
             res.setHeader('Content-Disposition', `attachment; filename="Anime_Episode_${id}_${epNo}.mp4"`);
@@ -137,24 +159,20 @@ app.get('/play', async (req, res) => {
         }
         res.status(videoResp.status);
 
-        // Pipe the stream to the client
         videoResp.data.pipe(res);
 
-        // Crucial for memory: if the client closes the connection early (e.g. seeking or pausing and leaving),
-        // destroy the upstream connection so it doesn't keep downloading in the background.
         res.on('close', () => {
             videoResp.data.destroy();
         });
 
     } catch (e) {
         if (!res.headersSent) {
-            const status = e.message && e.message.startsWith('NEED_CAPTCHA') ? 503 : 500;
+            const status = e.message && e.message.includes('NEED_CAPTCHA') ? 503 : 500;
             res.status(status).json({ error: e.message });
         }
     }
 });
 
-// Returns available quality options for an episode
 app.get('/qualities', async (req, res) => {
     const id = req.query.show_id;
     const epNo = req.query.ep_no;
@@ -218,6 +236,14 @@ app.get('/', (req, res) => {
         title: "Anime API (Node.js)",
         status: "running",
         source: "Allanime Direct",
+        version: "2.0 (Fixed)",
+        fixes: [
+            "Episode string formatting for new anime (tries 1, 1.0, 01 formats)",
+            "Flexible provider regex (handles sourceUrl/sourceName in any order)",
+            "Increased timeouts (7s per provider, 8s per request)",
+            "Episode list caching (1 hour TTL)",
+            "Better error handling for NEED_CAPTCHA"
+        ],
         available_endpoints: [
             "/search?query=<query>",
             "/anime/<id>",
@@ -225,11 +251,12 @@ app.get('/', (req, res) => {
             "/episodes/<id>?mode=<sub|dub>",
             "/episode_info?show_id=<id>&ep_no=<ep_no>",
             "/episode_url?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub>",
-            "/play?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub> (streams video directly)"
+            "/play?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub>",
+            "/qualities?show_id=<id>&ep_no=<ep_no>&mode=<sub|dub>"
         ]
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT} using Allanime Direct Mode`);
+    console.log(`Server running on port ${PORT} using Allanime Direct Mode (v2.0 Fixed)`);
 });
