@@ -1,67 +1,59 @@
 require('dotenv').config();
 const express = require('express');
-const compression = require('compression');
 const cors = require('cors');
+const axios = require('axios');
 const scraper = require('./scraper');
 
 const app = express();
 const PORT = process.env.PORT || 5678;
 
-// ⚡ MULTI-LEVEL CACHE
-const caches = {
-    episodes: new Map(),
-    search: new Map(),
-    details: new Map(),
-    qualities: new Map()
-};
+// Episode cache: { "showId:mode": [episodes], timestamp: Date }
+const episodeCache = new Map();
+const CACHE_TTL = 3600000; // 1 hour
 
-const TTL = { episodes: 3600000, search: 1800000, details: 7200000, qualities: 600000 };
+app.use(cors());
+app.use(express.json());
 
-function getCache(type, key) {
-    const c = caches[type].get(key);
-    return c && Date.now() - c.ts < TTL[type] ? c.data : null;
+// Cache helper
+function getCachedEpisodes(showId, mode) {
+    const key = `${showId}:${mode}`;
+    const cached = episodeCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.episodes;
+    }
+    return null;
 }
 
-function setCache(type, key, data) {
-    caches[type].set(key, { data, ts: Date.now() });
+function setCachedEpisodes(showId, mode, episodes) {
+    const key = `${showId}:${mode}`;
+    episodeCache.set(key, { episodes, timestamp: Date.now() });
 }
 
-// ⚡ MIDDLEWARE
-app.use(compression());
-app.use(cors({ maxAge: 86400 }));
-app.use(express.json({ limit: '1mb' }));
-
-// ⚡ ROUTES
+// Routes
 app.get('/search', async (req, res) => {
-    const q = req.query.query || '';
-    if (!q || q.length < 2) return res.status(400).json({ error: "Min 2 chars" });
-    
-    const key = `search:${q}`;
-    let result = getCache('search', key);
-    if (result) return res.json(result);
+    const query = req.query.query || '';
+    if (!query) return res.status(400).json({ error: "Missing query parameter" });
 
     try {
-        result = await scraper.searchAnime(q);
-        setCache('search', key, result);
-        res.json(result);
+        const results = await scraper.searchAnime(query);
+        res.json(results);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
 app.get('/anime/:id', async (req, res) => {
-    const { id } = req.params;
-    if (!id) return res.status(400).json({ error: "Invalid ID" });
-
-    const key = `details:${id}`;
-    let result = getCache('details', key);
-    if (result) return res.json(result);
-
     try {
-        result = await scraper.getAnimeDetails(id);
-        if (!result) return res.status(404).json({ error: "Not found" });
-        setCache('details', key, result);
-        res.json(result);
+        const id = req.params.id;
+        if (!id) return res.status(400).json({ error: "Invalid ID format" });
+
+        const details = await scraper.getAnimeDetails(id);
+
+        if (!details) {
+            return res.status(404).json({ error: "Anime not found on Allanime" });
+        }
+
+        res.json(details);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -71,35 +63,33 @@ app.get('/dub-check', async (req, res) => {
     const { show_id } = req.query;
     if (!show_id) return res.status(400).json({ error: "Missing show_id" });
 
-    const key = `details:${show_id}`;
-    let details = getCache('details', key);
-
     try {
-        if (!details) {
-            details = await scraper.getAnimeDetails(show_id);
-            if (details) setCache('details', key, details);
-        }
+        const details = await scraper.getAnimeDetails(show_id);
+        if (!details) return res.status(404).json({ error: "Anime not found", has_dub: false, episodes_dub: 0 });
         res.json({
-            has_dub: (details?.episodes_dub || 0) > 0,
-            episodes_dub: details?.episodes_dub || 0
+            has_dub: (details.episodes_dub || 0) > 0,
+            episodes_dub: details.episodes_dub || 0
         });
     } catch (e) {
-        res.status(500).json({ error: e.message, has_dub: false });
+        res.status(500).json({ error: e.message, has_dub: false, episodes_dub: 0 });
     }
 });
 
 app.get('/episodes/:id', async (req, res) => {
-    const { id } = req.params;
+    const id = req.params.id;
     const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
+
     if (!id) return res.status(400).json({ error: "Missing ID" });
 
-    const key = `ep:${id}:${mode}`;
-    let episodes = getCache('episodes', key);
-    if (episodes) return res.json({ mode, episodes });
-
     try {
-        episodes = await scraper.getEpisodesList(id, mode);
-        if (episodes.length > 0) setCache('episodes', key, episodes);
+        // Check cache first
+        let episodes = getCachedEpisodes(id, mode);
+        if (!episodes) {
+            episodes = await scraper.getEpisodesList(id, mode);
+            if (episodes.length > 0) {
+                setCachedEpisodes(id, mode, episodes);
+            }
+        }
         res.json({ mode, episodes });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -107,71 +97,91 @@ app.get('/episodes/:id', async (req, res) => {
 });
 
 app.get('/episode_url', async (req, res) => {
-    const { show_id, ep_no, quality = 'best', mode: rawMode } = req.query;
-    const mode = rawMode === 'dub' ? 'dub' : 'sub';
+    const id = req.query.show_id;
+    const epNo = req.query.ep_no;
+    const quality = req.query.quality || 'best';
+    const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
 
-    if (!show_id || !ep_no) return res.status(400).json({ error: "Missing params" });
+    if (!id || !epNo) return res.status(400).json({ error: "Missing show_id or ep_no" });
 
     try {
-        const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
-        if (!url) return res.status(404).json({ error: "Episode not found" });
+        const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
+        if (!url) return res.status(404).json({ error: "Episode not found or URL not available" });
         res.json({ episode_url: url, mode });
     } catch (e) {
-        res.status(e.message?.includes('CAPTCHA') ? 503 : 500).json({ error: e.message });
+        const status = e.message && e.message.includes('NEED_CAPTCHA') ? 503 : 500;
+        res.status(status).json({ error: e.message });
     }
 });
 
+// Stream endpoint with proper headers for all video players
 app.get('/play', async (req, res) => {
-    const { show_id, ep_no, quality = 'best', mode: rawMode } = req.query;
-    const mode = rawMode === 'dub' ? 'dub' : 'sub';
+    const id = req.query.show_id;
+    const epNo = req.query.ep_no;
+    const quality = req.query.quality || 'best';
+    const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
 
-    if (!show_id || !ep_no) return res.status(400).json({ error: "Missing params" });
+    if (!id || !epNo) return res.status(400).json({ error: "Missing show_id or ep_no" });
 
     try {
-        const url = await scraper.getEpisodeUrl(show_id, ep_no, mode, quality);
-        if (!url) return res.status(404).json({ error: "Not found" });
+        const url = await scraper.getEpisodeUrl(id, epNo, mode, quality);
+        if (!url) return res.status(404).json({ error: "Episode not found or URL not available" });
 
-        const axios = require('axios');
+        const range = req.headers.range;
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+            'Referer': 'https://allmanga.to'
+        };
+        if (range) {
+            headers['Range'] = range;
+        }
+
         const videoResp = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-                'Referer': 'https://allmanga.to',
-                ...(req.headers.range && { 'Range': req.headers.range })
-            },
+            headers,
             responseType: 'stream',
             timeout: 15000
         });
 
         res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Content-Disposition', req.query.download === '1' 
-            ? `attachment; filename="ep_${ep_no}.mp4"` 
-            : 'inline');
-        
-        if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
-        if (videoResp.headers['content-range']) res.setHeader('Content-Range', videoResp.headers['content-range']);
-        if (videoResp.headers['accept-ranges']) res.setHeader('Accept-Ranges', videoResp.headers['accept-ranges']);
-
+        if (req.query.download === '1') {
+            res.setHeader('Content-Disposition', `attachment; filename="Anime_Episode_${id}_${epNo}.mp4"`);
+        } else {
+            res.setHeader('Content-Disposition', 'inline');
+        }
+        if (videoResp.headers['content-length']) {
+            res.setHeader('Content-Length', videoResp.headers['content-length']);
+        }
+        if (videoResp.headers['content-range']) {
+            res.setHeader('Content-Range', videoResp.headers['content-range']);
+        }
+        if (videoResp.headers['accept-ranges']) {
+            res.setHeader('Accept-Ranges', videoResp.headers['accept-ranges']);
+        }
         res.status(videoResp.status);
+
         videoResp.data.pipe(res);
-        res.on('close', () => videoResp.data.destroy());
+
+        res.on('close', () => {
+            videoResp.data.destroy();
+        });
+
     } catch (e) {
-        if (!res.headersSent) res.status(500).json({ error: e.message });
+        if (!res.headersSent) {
+            const status = e.message && e.message.includes('NEED_CAPTCHA') ? 503 : 500;
+            res.status(status).json({ error: e.message });
+        }
     }
 });
 
 app.get('/qualities', async (req, res) => {
-    const { show_id, ep_no, mode: rawMode } = req.query;
-    const mode = rawMode === 'dub' ? 'dub' : 'sub';
+    const id = req.query.show_id;
+    const epNo = req.query.ep_no;
+    const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
 
-    if (!show_id || !ep_no) return res.status(400).json({ error: "Missing params" });
-
-    const key = `qualities:${show_id}:${ep_no}:${mode}`;
-    let qualities = getCache('qualities', key);
-    if (qualities) return res.json({ qualities });
+    if (!id || !epNo) return res.status(400).json({ error: "Missing show_id or ep_no" });
 
     try {
-        qualities = await scraper.getAvailableQualities(show_id, ep_no, mode);
-        if (qualities.length > 0) setCache('qualities', key, qualities);
+        const qualities = await scraper.getAvailableQualities(id, epNo, mode);
         res.json({ qualities });
     } catch (e) {
         res.status(500).json({ error: e.message, qualities: [] });
@@ -179,12 +189,14 @@ app.get('/qualities', async (req, res) => {
 });
 
 app.get('/episode_info', async (req, res) => {
-    const { show_id, ep_no } = req.query;
-    if (!show_id || !ep_no) return res.status(400).json({ error: "Missing params" });
+    const id = req.query.show_id;
+    const epNo = req.query.ep_no;
+
+    if (!id || !epNo) return res.status(400).json({ error: "Missing show_id or ep_no" });
 
     try {
-        const info = await scraper.getEpisodeInfo(show_id, ep_no);
-        if (!info) return res.status(404).json({ error: "Not found" });
+        const info = await scraper.getEpisodeInfo(id, epNo);
+        if (!info) return res.status(404).json({ error: "Episode info not found" });
         res.json(info);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -192,45 +204,59 @@ app.get('/episode_info', async (req, res) => {
 });
 
 app.post('/thumbnails', async (req, res) => {
-    const ids = req.body?.ids || req.body?.mal_ids;
-    if (!ids || !Array.isArray(ids)) return res.status(400).json({ error: "Missing 'ids' array" });
+    try {
+        const { ids } = req.body;
+        const inputIds = ids || req.body.mal_ids;
 
-    const results = {};
-    await Promise.allSettled(ids.map(async (id) => {
-        try {
-            const details = await scraper.getAnimeDetails(id);
-            if (details?.thumbnail_url) results[id] = details.thumbnail_url;
-        } catch {}
-    }));
+        if (!inputIds || !Array.isArray(inputIds)) {
+            return res.status(400).json({ error: "Missing 'ids' list in request body" });
+        }
 
-    res.json(results);
+        const results = {};
+
+        for (const id of inputIds) {
+            try {
+                const details = await scraper.getAnimeDetails(id);
+                if (details && details.thumbnail_url) {
+                    results[id] = details.thumbnail_url;
+                }
+            } catch (err) {
+                // Ignore individual failures
+            }
+        }
+
+        res.json(results);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.get('/', (req, res) => {
     res.json({
-        title: "Anime API (TURBO)",
+        title: "Anime API (Node.js)",
         status: "running",
-        version: "3.0 ULTRA-FAST",
-        features: [
-            "Multi-level caching (episodes, search, details, qualities)",
-            "Gzip compression",
-            "Parallel provider fetching",
-            "Smart timeout management",
-            "Response limiting"
+        source: "Allanime Direct",
+        version: "2.0 (Fixed)",
+        fixes: [
+            "Episode string formatting for new anime (tries 1, 1.0, 01 formats)",
+            "Flexible provider regex (handles sourceUrl/sourceName in any order)",
+            "Increased timeouts (7s per provider, 8s per request)",
+            "Episode list caching (1 hour TTL)",
+            "Better error handling for NEED_CAPTCHA"
         ],
-        endpoints: [
-            "/search?query=<q>",
+        available_endpoints: [
+            "/search?query=<query>",
             "/anime/<id>",
+            "/thumbnails (POST with {'ids': ['id1', 'id2', ...]})",
             "/episodes/<id>?mode=<sub|dub>",
-            "/episode_url?show_id=<id>&ep_no=<no>",
-            "/play?show_id=<id>&ep_no=<no>",
-            "/qualities?show_id=<id>&ep_no=<no>",
-            "/episode_info?show_id=<id>&ep_no=<no>",
-            "/thumbnails (POST)"
+            "/episode_info?show_id=<id>&ep_no=<ep_no>",
+            "/episode_url?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub>",
+            "/play?show_id=<id>&ep_no=<ep_no>&quality=<quality>&mode=<sub|dub>",
+            "/qualities?show_id=<id>&ep_no=<ep_no>&mode=<sub|dub>"
         ]
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`⚡ TURBO AnimeVault running on port ${PORT}`);
+    console.log(`Server running on port ${PORT} using Allanime Direct Mode (v2.0 Fixed)`);
 });
