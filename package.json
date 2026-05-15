@@ -2,15 +2,12 @@
   "name": "allanime-api",
   "version": "2.0.0",
   "description": "Fast Node.js API to search anime, get episodes, and stream videos from Allanime.",
-  "main": "src/index.js",
+  "main": "server.js",
   "type": "commonjs",
-  "scripts": {},
-  "keywords": [
-    "anime",
-    "api",
-    "allanime",
-    "streaming"
-  ],
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["anime", "api", "allanime", "streaming"],
   "author": "mdtahseen7",
   "license": "MIT",
   "dependencies": {
