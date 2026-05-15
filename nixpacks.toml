@@ -1,2 +1,8 @@
-[phases.setup]
-nixPkgs = ["nodejs_20"]
+[build]
+cmd = "npm install"
+
+[start]
+cmd = "npm start"
+
+[env]
+PORT = "5678"
