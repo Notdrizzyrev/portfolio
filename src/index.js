@@ -271,35 +271,6 @@ app.post('/thumbnails', async (req, res) => {
   res.json(results);
 });
 
-
-// ── DEBUG EPISODE SOURCES ────────────────────────────────────────────────────
-// Exposes raw AllAnime source lines for a given show/episode so we can see
-// exactly what the scraper receives from AllAnime.
-
-app.get('/debug-sources', async (req, res) => {
-  const { show_id, ep_no, mode: rawMode, title } = req.query;
-  const mode = rawMode === 'dub' ? 'dub' : 'sub';
-  if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing show_id or ep_no' });
-  try {
-    const resolvedId = await scraper.searchAnime(show_id).then(results => {
-      if (!results.length) return null;
-      return results[0].id;
-    });
-
-    const links = await scraper.getAllEpisodeLinks(show_id, ep_no, mode, 'best', title || null);
-    const details = await scraper.getAnimeDetails(show_id, title || null);
-
-    res.json({
-      resolved_id: details?.id || null,
-      title_matched: details?.title || null,
-      links_found: links.length,
-      links,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
 // ── START ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
