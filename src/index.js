@@ -7,8 +7,6 @@ const scraper = require('./scraper');
 const app  = express();
 const PORT = process.env.PORT || 5678;
 
-// Self-URL for rewriting HLS segment URLs through /hls-proxy.
-// Set BACKEND_URL in your .env / Railway env vars, e.g. https://yourapp.railway.app
 const SELF = (process.env.BACKEND_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 
 app.use(cors({
@@ -20,7 +18,7 @@ app.use(express.json());
 // ── ROOT ──────────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
-  res.json({ title: 'AnimeVault Backend', status: 'running', version: '7.0.0', source: 'allanime' });
+  res.json({ title: 'AnimeVault Backend', status: 'running', version: '7.2.0', source: 'allanime' });
 });
 
 // ── SEARCH ────────────────────────────────────────────────────────────────────
@@ -97,9 +95,6 @@ app.get('/episode_url', async (req, res) => {
 });
 
 // ── PLAY PROXY ────────────────────────────────────────────────────────────────
-// Streams ALL video through the backend with correct headers (fixes Referer/CORS).
-// For HLS content: buffers the manifest and rewrites every segment/sub-playlist URL
-// to go through /hls-proxy — the browser never touches the source CDN directly.
 
 const VIDEO_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
@@ -126,7 +121,6 @@ app.get('/play', async (req, res) => {
       const reqHeaders = { ...VIDEO_HEADERS };
       if (req.headers['range']) reqHeaders['Range'] = req.headers['range'];
 
-      // Pick the right Referer for the source domain
       if (link.url.includes('gogoanime') || link.url.includes('gogo')) {
         reqHeaders['Referer'] = 'https://gogoanime.cl/';
         reqHeaders['Origin']  = 'https://gogoanime.cl';
@@ -151,8 +145,6 @@ app.get('/play', async (req, res) => {
             ? `attachment; filename="ep${ep_no}.mp4"` : 'inline');
 
           if (isHlsManifest) {
-            // Buffer the m3u8 manifest and rewrite all CDN segment URLs
-            // to go through /hls-proxy — browser never hits CDN directly.
             let manifest = '';
             videoResp.data.setEncoding('utf8');
             videoResp.data.on('data', chunk => { manifest += chunk; });
@@ -170,7 +162,6 @@ app.get('/play', async (req, res) => {
               if (!res.headersSent) res.status(502).json({ error: 'Manifest read error' });
             });
           } else {
-            // MP4 / direct video — pipe bytes straight through
             res.setHeader('Content-Type', videoResp.headers['content-type'] || 'video/mp4');
             res.setHeader('Accept-Ranges', 'bytes');
             if (videoResp.headers['content-length']) res.setHeader('Content-Length', videoResp.headers['content-length']);
@@ -206,7 +197,6 @@ app.get('/hls-proxy', async (req, res) => {
     const decoded = decodeURIComponent(url);
     const headers = { ...VIDEO_HEADERS };
 
-    // Pick correct Referer based on the CDN domain
     if (decoded.includes('gogoanime') || decoded.includes('gogo') || decoded.includes('playtaku')) {
       headers['Referer'] = 'https://gogoanime.cl/';
       headers['Origin']  = 'https://gogoanime.cl';
@@ -284,7 +274,7 @@ app.post('/thumbnails', async (req, res) => {
 // ── START ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`✅ AnimeVault backend v7.0 running on port ${PORT}`);
+  console.log(`✅ AnimeVault backend v7.2 running on port ${PORT}`);
   console.log(`   Self URL (for HLS rewriting): ${SELF}`);
   console.log(`   Source: AllAnime (allanime.day)`);
 });
