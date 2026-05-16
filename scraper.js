@@ -157,338 +157,47 @@ async function getLinks(providerPath) {
     return allLinks;
 }
 
-async function searchAnime(query) {
-    const searchGql = `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
-        shows( search: $search limit: $limit page: $page countryOrigin: $countryOrigin ) {
-            edges {
-                _id
-                name
-                englishName
-                nativeName
-                availableEpisodes
-                __typename
-            }
-        }
-    }`;
-    try {
-        const response = await executeWithLimit(async () => axiosInstance.post(`${ALLANIME_API}/api`, {
-            variables: { search: { allowAdult: false, allowUnknown: false, query: query }, limit: 20, page: 1, countryOrigin: "ALL" },
-            query: searchGql
-        }, { timeout: 12000 }));
-        const shows = response.data.data.shows.edges || [];
-        return shows.slice(0, 15).map(show => ({
-            id: show._id,
-            title: show.englishName || show.name.replace(/\\"/g, '"'),
-            episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
-            episodes_dub: parseInt(show.availableEpisodes.dub) || 0
-        }));
-    } catch (e) {
-        console.error('Search error:', e.message);
-        return [];
-    }
-}
-
-async function getAnimeDetails(showId) {
-    const query = `query ($showId: String!) {
-        show( _id: $showId ) {
-            _id
-            name
-            englishName
-            nativeName
-            thumbnail
-            description
-            status
-            availableEpisodesDetail
-        }
-    }`;
-    try {
-        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-            variables: { showId },
-            query: query
-        });
-        const show = response.data.data.show;
-        if (!show) return null;
-        return {
-            id: show._id,
-            title: show.englishName || show.name,
-            title_english: show.englishName || show.name,
-            thumbnail_url: show.thumbnail,
-            synopsis: show.description ? show.description.replace(/<[^>]*>?/gm, '') : '',
-            status: show.status,
-            episodes_sub: show.availableEpisodesDetail.sub ? show.availableEpisodesDetail.sub.length : 0,
-            episodes_dub: show.availableEpisodesDetail.dub ? show.availableEpisodesDetail.dub.length : 0
-        };
-    } catch (e) {
-        return null;
-    }
-}
-
-async function getEpisodesList(showId, mode = 'sub') {
-    const episodesListGql = `query ($showId: String!) {
-        show( _id: $showId ) {
-            _id
-            availableEpisodesDetail
-        }
-    }`;
-    try {
-        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-            variables: { showId },
-            query: episodesListGql
-        });
-        const details = response.data.data.show.availableEpisodesDetail;
-        const episodes = details[mode] || [];
-        return episodes.sort((a, b) => parseFloat(a) - parseFloat(b));
-    } catch (e) {
-        return [];
-    }
-}
-
-// FIX: Returns { sourceName, path } with path already decoded
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔍 PARSE SOURCE LINES - WITH COMPREHENSIVE LOGGING
+// ─────────────────────────────────────────────────────────────────────────────
 function parseSourceLines(apiData) {
-    const rawJson = JSON.stringify(apiData);
-    let respLines = [];
-
-    if (rawJson.includes('"tobeparsed"')) {
-        let blobValue = null;
-        const tbpMatch = rawJson.match(/"tobeparsed":"([^"]*)"/);
-        if (tbpMatch) blobValue = tbpMatch[1];
-        if (blobValue) {
-            const plain = decrypt(blobValue);
-            if (plain) {
-                const parts = plain.replace(/[{}]/g, '\n').split('\n');
-                for (const part of parts) {
-                    const m1 = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-                    const m2 = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"--([^"]*)"/);
-                    if (m1) {
-                        const path = decodeProviderId(m1[1]);
-                        if (path) respLines.push({ sourceName: m1[2], path });
-                    } else if (m2) {
-                        const path = decodeProviderId(m2[2]);
-                        if (path) respLines.push({ sourceName: m2[1], path });
-                    }
-                }
-            }
-        }
-    }
-
-    if (apiData.data?.episode?.sourceUrls) {
-        const sourceUrls = apiData.data.episode.sourceUrls;
-        if (Array.isArray(sourceUrls)) {
-            for (const source of sourceUrls) {
-                if (!source.sourceUrl || !source.sourceName) continue;
-                let path;
-                if (source.sourceUrl.startsWith('--')) {
-                    path = decodeProviderId(source.sourceUrl.slice(2));
-                } else {
-                    path = source.sourceUrl;
-                }
-                if (path) respLines.push({ sourceName: source.sourceName, path });
-            }
-        } else if (typeof sourceUrls === 'string') {
-            const cleaned = sourceUrls.replace(/\\u002F/g, '/').replace(/\\/g, '');
-            const parts = cleaned.replace(/[{}[\]]/g, '\n').split('\n');
-            for (const part of parts) {
-                const m1 = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
-                const m2 = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"--([^"]*)"/);
-                const m3 = part.match(/"sourceUrl":"(https?:[^"]*)".*"sourceName":"([^"]*)"/);
-                const m4 = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"(https?:[^"]*)"/);
-                if (m1) {
-                    const path = decodeProviderId(m1[1]);
-                    if (path) respLines.push({ sourceName: m1[2], path });
-                } else if (m2) {
-                    const path = decodeProviderId(m2[2]);
-                    if (path) respLines.push({ sourceName: m2[1], path });
-                } else if (m3) {
-                    respLines.push({ sourceName: m3[2], path: m3[1] });
-                } else if (m4) {
-                    respLines.push({ sourceName: m4[1], path: m4[2] });
-                }
-            }
-        }
-    }
-
-    return respLines;
-}
-
-async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
-    const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-        episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
-            episodeString
-            sourceUrls
-        }
-    }`;
-
-    const episodeFormats = [epNo, String(parseFloat(epNo)), String(parseInt(epNo)).padStart(2, '0'), parseFloat(epNo).toFixed(1)];
-    let apiData = null;
-
-    for (const epString of episodeFormats) {
-        try {
-            const postResp = await executeWithLimit(async () => axiosInstance.post(`${ALLANIME_API}/api`, {
-                variables: { showId, translationType: mode, episodeString: epString },
-                query: episodeEmbedGql
-            }, { timeout: 10000 }));
-            const rawText = JSON.stringify(postResp.data);
-            if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls'))) {
-                apiData = postResp.data;
-                console.log(`[Episode] Found: ep=${epString}, mode=${mode}`);
-                break;
-            }
-        } catch (e) {
-            continue;
-        }
-    }
-
+    console.log('\n[LOG] parseSourceLines called');
+    console.log('[LOG] apiData type:', typeof apiData);
+    console.log('[LOG] apiData keys:', Object.keys(apiData || {}));
+    
+    const respLines = [];
+    
     if (!apiData) {
-        console.log(`[Episode] No data found for ${showId} ep${epNo} ${mode}`);
-        return null;
+        console.log('[LOG] ✗ apiData is null/undefined');
+        return respLines;
     }
 
-    if (apiData.errors && apiData.errors.length > 0) {
-        console.log(`[Episode] API error: ${apiData.errors[0].message || 'Unknown'}`);
-        return null;
-    }
-
-    let respLines = parseSourceLines(apiData);
-    if (respLines.length === 0) {
-        console.log(`[Episode] No sources found`);
-        return null;
-    }
-
-    const providerDefs = [
-        { name: 'Default', filemoon: false },
-        { name: 'Yt-mp4', filemoon: false },
-        { name: 'S-mp4', filemoon: false },
-        { name: 'Luf-Mp4', filemoon: false },
-        { name: 'Fm-mp4', filemoon: true }
-    ];
-
-    for (const prov of providerDefs) {
-        const entry = respLines.find(r => r.sourceName === prov.name);
-        if (!entry) continue;
+    // Check for data.data.episode.sourceUrls
+    try {
+        const sourceUrls = apiData?.data?.episode?.sourceUrls;
+        console.log('[LOG] sourceUrls found:', !!sourceUrls);
         
-        try {
-            let links = [];
-            if (prov.filemoon) {
-                links = await getFilemoonLinks(entry.path);
-            } else {
-                links = await getLinks(entry.path);
-            }
+        if (!sourceUrls) {
+            console.log('[LOG] ✗ No sourceUrls in apiData.data.episode');
+            console.log('[LOG] Full structure:', JSON.stringify(apiData, null, 2).substring(0, 500));
+            return respLines;
+        }
+
+        console.log('[LOG] sourceUrls type:', typeof sourceUrls);
+        console.log('[LOG] sourceUrls length:', sourceUrls.length);
+        console.log('[LOG] sourceUrls sample:', JSON.stringify(sourceUrls).substring(0, 300));
+
+        // Parse each source
+        for (let i = 0; i < sourceUrls.length; i++) {
+            const source = sourceUrls[i];
+            console.log(`\n[LOG] Processing source #${i}:`, source);
             
-            if (links.length > 0) {
-                links.sort((a, b) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
-                if (quality === 'best') {
-                    return links[0].url;
-                } else if (quality === 'worst') {
-                    return links[links.length - 1].url;
-                } else {
-                    const match = links.find(l => l.resolution === quality);
-                    return match ? match.url : links[0].url;
-                }
-            }
-        } catch (e) {
-            continue;
-        }
-    }
-
-    console.log(`[Episode] No playable links found`);
-    return null;
-}
-
-async function getEpisodeInfo(showId, epNo) {
-    const epNum = parseFloat(epNo);
-    const query = `query ($showId: String!, $epNum: Float!) {
-        episodeInfos( showId: $showId episodeNumStart: $epNum episodeNumEnd: $epNum ) {
-            episodeIdNum
-            notes
-            description
-            thumbnails
-        }
-    }`;
-    try {
-        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
-            variables: { showId, epNum },
-            query: query
-        });
-        const infos = response.data.data.episodeInfos;
-        if (!infos || infos.length === 0) return null;
-        const info = infos[0];
-        let thumbnails = info.thumbnails || [];
-        thumbnails = thumbnails.map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
-        return {
-            episode_no: info.episodeIdNum,
-            title: info.notes || '',
-            description: info.description || '',
-            thumbnails
-        };
-    } catch (e) {
-        return null;
-    }
-}
-
-async function getAvailableQualities(showId, epNo, mode = 'sub') {
-    try {
-        const episodeFormats = [epNo, String(parseFloat(epNo)), String(parseInt(epNo)).padStart(2, '0'), parseFloat(epNo).toFixed(1)];
-        let apiData = null;
-        const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
-            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { 
-                episodeString 
-                sourceUrls 
-            }
-        }`;
-
-        for (const epString of episodeFormats) {
-            try {
-                const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
-                    variables: { showId, translationType: mode, episodeString: epString },
-                    query: episodeEmbedGql
-                });
-                const rawText = JSON.stringify(postResp.data);
-                if (rawText && (rawText.includes('tobeparsed') || rawText.includes('sourceUrls'))) {
-                    apiData = postResp.data;
-                    break;
-                }
-            } catch (e) { }
-        }
-
-        if (!apiData) return [];
-        if (apiData.errors && apiData.errors.length > 0) return [];
-
-        let respLines = parseSourceLines(apiData);
-        if (respLines.length === 0) return [];
-
-        const providerDefs = [
-            { name: 'Default', filemoon: false },
-            { name: 'Yt-mp4', filemoon: false },
-            { name: 'S-mp4', filemoon: false },
-            { name: 'Luf-Mp4', filemoon: false },
-            { name: 'Fm-mp4', filemoon: true }
-        ];
-
-        const linkPromises = providerDefs.map(async (prov) => {
-            const entry = respLines.find(r => r.sourceName === prov.name);
-            if (!entry) return [];
-            try {
-                if (prov.filemoon) return await getFilemoonLinks(entry.path);
-                return await getLinks(entry.path);
-            } catch (e) { return []; }
-        });
-
-        const results = await Promise.all(linkPromises);
-        let allLinks = results.flat();
-        if (allLinks.length === 0) return [];
-
-        const resolutions = [...new Set(allLinks.map(l => l.resolution))];
-        return resolutions;
-    } catch (e) {
-        return [];
-    }
-}
-
-module.exports = {
-    searchAnime,
-    getAnimeDetails,
-    getEpisodesList,
-    getEpisodeUrl,
-    getEpisodeInfo,
-    getAvailableQualities
-};
+            if (!source) continue;
+            
+            // Extract sourceUrl and sourceName from format: "sourceName@sourceUrl"
+            const parts = source.split('@');
+            if (parts.length >= 2) {
+                const sourceName = parts[0].trim();
+                const sourceUrl = parts.slice(1).join('@').trim(); // Handle URLs with @ in them
+                
+                console.log
