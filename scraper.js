@@ -13,9 +13,7 @@ const axiosInstance = axios.create({
         'Referer': ALLANIME_REFR
     },
     timeout: 15000,
-    maxRedirects: 5,
-    httpAgent: require('http').globalAgent,
-    httpsAgent: require('https').globalAgent
+    maxRedirects: 5
 });
 
 let activeRequests = 0;
@@ -157,47 +155,313 @@ async function getLinks(providerPath) {
     return allLinks;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 🔍 PARSE SOURCE LINES - WITH COMPREHENSIVE LOGGING
-// ─────────────────────────────────────────────────────────────────────────────
 function parseSourceLines(apiData) {
-    console.log('\n[LOG] parseSourceLines called');
-    console.log('[LOG] apiData type:', typeof apiData);
-    console.log('[LOG] apiData keys:', Object.keys(apiData || {}));
-    
+    console.log('\n[PARSE] ✓ parseSourceLines called');
     const respLines = [];
     
     if (!apiData) {
-        console.log('[LOG] ✗ apiData is null/undefined');
+        console.log('[PARSE] ✗ apiData is null');
         return respLines;
     }
 
-    // Check for data.data.episode.sourceUrls
     try {
         const sourceUrls = apiData?.data?.episode?.sourceUrls;
-        console.log('[LOG] sourceUrls found:', !!sourceUrls);
+        console.log('[PARSE] sourceUrls found:', !!sourceUrls, 'count:', sourceUrls?.length || 0);
         
-        if (!sourceUrls) {
-            console.log('[LOG] ✗ No sourceUrls in apiData.data.episode');
-            console.log('[LOG] Full structure:', JSON.stringify(apiData, null, 2).substring(0, 500));
+        if (!sourceUrls || sourceUrls.length === 0) {
+            console.log('[PARSE] ✗ No sourceUrls found');
             return respLines;
         }
 
-        console.log('[LOG] sourceUrls type:', typeof sourceUrls);
-        console.log('[LOG] sourceUrls length:', sourceUrls.length);
-        console.log('[LOG] sourceUrls sample:', JSON.stringify(sourceUrls).substring(0, 300));
+        for (const url of sourceUrls) {
+            if (!url) continue;
+            const [sourceName, ...pathParts] = url.split('@');
+            const path = pathParts.join('@');
+            console.log(`[PARSE]   → Found source: "${sourceName}" | path: "${path.substring(0, 50)}..."`);
+            respLines.push({ sourceName: sourceName.trim(), path: path.trim() });
+        }
+        console.log('[PARSE] ✓ Parsed', respLines.length, 'sources');
+    } catch (e) {
+        console.log('[PARSE] ✗ Error parsing:', e.message);
+    }
+    
+    return respLines;
+}
 
-        // Parse each source
-        for (let i = 0; i < sourceUrls.length; i++) {
-            const source = sourceUrls[i];
-            console.log(`\n[LOG] Processing source #${i}:`, source);
-            
-            if (!source) continue;
-            
-            // Extract sourceUrl and sourceName from format: "sourceName@sourceUrl"
-            const parts = source.split('@');
-            if (parts.length >= 2) {
-                const sourceName = parts[0].trim();
-                const sourceUrl = parts.slice(1).join('@').trim(); // Handle URLs with @ in them
-                
-                console.log
+async function getEpisodeUrl(showId, epNo, mode = 'sub', quality = 'best') {
+    console.log(`\n[EPISODE] Getting URL for show=${showId} ep=${epNo} mode=${mode} quality=${quality}`);
+    
+    try {
+        const episodeFormats = [epNo, String(parseFloat(epNo)), String(parseInt(epNo)).padStart(2, '0'), parseFloat(epNo).toFixed(1)];
+        let apiData = null;
+        const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { 
+                episodeString 
+                sourceUrls 
+            }
+        }`;
+
+        console.log('[EPISODE] Trying episode formats:', episodeFormats);
+        for (const epString of episodeFormats) {
+            try {
+                const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                    variables: { showId, translationType: mode, episodeString: epString },
+                    query: episodeEmbedGql
+                });
+                const rawText = JSON.stringify(postResp.data);
+                console.log(`[EPISODE]   Testing format "${epString}": ${rawText.includes('sourceUrls') ? '✓ has sources' : '✗ no sources'}`);
+                if (rawText.includes('sourceUrls')) {
+                    apiData = postResp.data;
+                    console.log('[EPISODE] ✓ API response received');
+                    break;
+                }
+            } catch (e) {
+                console.log(`[EPISODE]   Format "${epString}" failed:`, e.message);
+            }
+        }
+
+        if (!apiData) {
+            console.log('[EPISODE] ✗ No API response found');
+            return null;
+        }
+
+        let respLines = parseSourceLines(apiData);
+        if (respLines.length === 0) {
+            console.log('[EPISODE] ✗ parseSourceLines returned empty');
+            return null;
+        }
+
+        const providerDefs = [
+            { name: 'Default', filemoon: false },
+            { name: 'Yt-mp4', filemoon: false },
+            { name: 'S-mp4', filemoon: false },
+            { name: 'Luf-Mp4', filemoon: false },
+            { name: 'Fm-mp4', filemoon: true }
+        ];
+
+        console.log('[EPISODE] Fetching from', respLines.length, 'providers...');
+        const linkPromises = providerDefs.map(async (prov) => {
+            const entry = respLines.find(r => r.sourceName === prov.name);
+            if (!entry) {
+                console.log(`[EPISODE]   ${prov.name}: ✗ not found`);
+                return [];
+            }
+            try {
+                console.log(`[EPISODE]   ${prov.name}: fetching...`);
+                const links = prov.filemoon ? 
+                    await getFilemoonLinks(entry.path) : 
+                    await getLinks(entry.path);
+                console.log(`[EPISODE]   ${prov.name}: ✓ got ${links.length} links`);
+                return links;
+            } catch (e) {
+                console.log(`[EPISODE]   ${prov.name}: ✗ error -`, e.message);
+                return [];
+            }
+        });
+
+        const results = await Promise.all(linkPromises);
+        let allLinks = results.flat();
+        console.log('[EPISODE] ✓ Total links found:', allLinks.length);
+        
+        if (allLinks.length === 0) {
+            console.log('[EPISODE] ✗ No playable links found');
+            return null;
+        }
+
+        const qualityOrder = ['1080', '720', '480', '360', 'hls'];
+        let selected = allLinks[0];
+        for (const q of qualityOrder) {
+            const match = allLinks.find(l => l.resolution.includes(q));
+            if (match) {
+                selected = match;
+                break;
+            }
+        }
+        
+        console.log('[EPISODE] ✓ Selected:', selected.resolution);
+        return selected.url;
+    } catch (e) {
+        console.log('[EPISODE] ✗ Fatal error:', e.message);
+        return null;
+    }
+}
+
+async function searchAnime(query) {
+    const searchGql = `query($search: SearchInput $limit: Int $page: Int $countryOrigin: VaildCountryOriginEnumType) {
+        shows( search: $search limit: $limit page: $page countryOrigin: $countryOrigin ) {
+            edges {
+                _id
+                name
+                englishName
+                nativeName
+                availableEpisodes
+                __typename
+            }
+        }
+    }`;
+    try {
+        const response = await executeWithLimit(async () => axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { search: { allowAdult: false, allowUnknown: false, query: query }, limit: 20, page: 1, countryOrigin: "ALL" },
+            query: searchGql
+        }, { timeout: 12000 }));
+        const shows = response.data.data.shows.edges || [];
+        return shows.slice(0, 15).map(show => ({
+            id: show._id,
+            title: show.englishName || show.name.replace(/\\"/g, '"'),
+            episodes_sub: parseInt(show.availableEpisodes.sub) || 0,
+            episodes_dub: parseInt(show.availableEpisodes.dub) || 0
+        }));
+    } catch (e) {
+        console.error('Search error:', e.message);
+        return [];
+    }
+}
+
+async function getAnimeDetails(showId) {
+    const query = `query ($showId: String!) {
+        show( _id: $showId ) {
+            _id
+            name
+            englishName
+            nativeName
+            thumbnail
+            description
+            status
+            availableEpisodesDetail
+        }
+    }`;
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId },
+            query: query
+        });
+        const show = response.data.data.show;
+        if (!show) return null;
+        return {
+            id: show._id,
+            title: show.englishName || show.name,
+            title_english: show.englishName || show.name,
+            thumbnail_url: show.thumbnail,
+            synopsis: show.description ? show.description.replace(/<[^>]*>?/gm, '') : '',
+            status: show.status,
+            episodes_sub: parseInt(show.availableEpisodesDetail?.sub) || 0,
+            episodes_dub: parseInt(show.availableEpisodesDetail?.dub) || 0
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+async function getEpisodesList(showId, mode = 'sub') {
+    const query = `query ($showId: String! $translationType: VaildTranslationTypeEnumType!) {
+        episodes( showId: $showId translationType: $translationType ) {
+            episodeString
+            episodeIdNum
+        }
+    }`;
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId, translationType: mode },
+            query: query
+        });
+        return response.data.data.episodes || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+async function getEpisodeInfo(showId, epNo) {
+    const query = `query ($showId: String!, $epNum: String!) {
+        episodeInfos( showId: $showId episodeNum: $epNum ) {
+            episodeIdNum
+            notes
+            description
+            thumbnails
+        }
+    }`;
+    try {
+        const response = await axiosInstance.post(`${ALLANIME_API}/api`, {
+            variables: { showId, epNum: epNo },
+            query: query
+        });
+        const infos = response.data.data.episodeInfos;
+        if (!infos || infos.length === 0) return null;
+        const info = infos[0];
+        let thumbnails = info.thumbnails || [];
+        thumbnails = thumbnails.map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
+        return {
+            episode_no: info.episodeIdNum,
+            title: info.notes || '',
+            description: info.description || '',
+            thumbnails
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+async function getAvailableQualities(showId, epNo, mode = 'sub') {
+    try {
+        const episodeFormats = [epNo, String(parseFloat(epNo)), String(parseInt(epNo)).padStart(2, '0'), parseFloat(epNo).toFixed(1)];
+        let apiData = null;
+        const episodeEmbedGql = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
+            episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { 
+                episodeString 
+                sourceUrls 
+            }
+        }`;
+
+        for (const epString of episodeFormats) {
+            try {
+                const postResp = await axiosInstance.post(`${ALLANIME_API}/api`, {
+                    variables: { showId, translationType: mode, episodeString: epString },
+                    query: episodeEmbedGql
+                });
+                const rawText = JSON.stringify(postResp.data);
+                if (rawText.includes('sourceUrls')) {
+                    apiData = postResp.data;
+                    break;
+                }
+            } catch (e) { }
+        }
+
+        if (!apiData) return [];
+        let respLines = parseSourceLines(apiData);
+        if (respLines.length === 0) return [];
+
+        const providerDefs = [
+            { name: 'Default', filemoon: false },
+            { name: 'Yt-mp4', filemoon: false },
+            { name: 'S-mp4', filemoon: false },
+            { name: 'Luf-Mp4', filemoon: false },
+            { name: 'Fm-mp4', filemoon: true }
+        ];
+
+        const linkPromises = providerDefs.map(async (prov) => {
+            const entry = respLines.find(r => r.sourceName === prov.name);
+            if (!entry) return [];
+            try {
+                if (prov.filemoon) return await getFilemoonLinks(entry.path);
+                return await getLinks(entry.path);
+            } catch (e) { return []; }
+        });
+
+        const results = await Promise.all(linkPromises);
+        let allLinks = results.flat();
+        if (allLinks.length === 0) return [];
+
+        const resolutions = [...new Set(allLinks.map(l => l.resolution))];
+        return resolutions;
+    } catch (e) {
+        return [];
+    }
+}
+
+module.exports = {
+    searchAnime,
+    getAnimeDetails,
+    getEpisodesList,
+    getEpisodeUrl,
+    getEpisodeInfo,
+    getAvailableQualities
+};
