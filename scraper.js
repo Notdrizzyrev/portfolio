@@ -284,6 +284,26 @@ function parseSourceLines(apiData) {
                 }
                 if (path) respLines.push({ sourceName: source.sourceName, path });
             }
+        } else if (typeof sourceUrls === 'string') {
+            const cleaned = sourceUrls.replace(/\\u002F/g, '/').replace(/\\/g, '');
+            const parts = cleaned.replace(/[{}[\]]/g, '\n').split('\n');
+            for (const part of parts) {
+                const m1 = part.match(/"sourceUrl":"--([^"]*)".*"sourceName":"([^"]*)"/);
+                const m2 = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"--([^"]*)"/);
+                const m3 = part.match(/"sourceUrl":"(https?:[^"]*)".*"sourceName":"([^"]*)"/);
+                const m4 = part.match(/"sourceName":"([^"]*)".*"sourceUrl":"(https?:[^"]*)"/);
+                if (m1) {
+                    const path = decodeProviderId(m1[1]);
+                    if (path) respLines.push({ sourceName: m1[2], path });
+                } else if (m2) {
+                    const path = decodeProviderId(m2[2]);
+                    if (path) respLines.push({ sourceName: m2[1], path });
+                } else if (m3) {
+                    respLines.push({ sourceName: m3[2], path: m3[1] });
+                } else if (m4) {
+                    respLines.push({ sourceName: m4[1], path: m4[2] });
+                }
+            }
         }
     }
 
