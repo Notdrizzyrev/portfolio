@@ -8,18 +8,12 @@ const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest(
 const EPISODE_PERSISTED_HASH = 'd405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec';
 
 const axiosInstance = axios.create({
-  headers: {
-    'User-Agent': AGENT,
-    'Referer': 'https://allmanga.to',
-    'Origin': 'https://allmanga.to',
-    'Content-Type': 'application/json',
-  },
   timeout: 8000,
   maxRedirects: 3,
+  headers: { 'User-Agent': AGENT }
 });
 
-// ── DECODE ────────────────────────────────────────────────────────────────────
-
+// Decode functions
 function decodeTobeparsed(blobB64) {
   try {
     const buf = Buffer.from(blobB64, 'base64');
@@ -61,8 +55,7 @@ function b64urlToHex(b64url) {
   return Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('hex');
 }
 
-// ── PROVIDERS ─────────────────────────────────────────────────────────────────
-
+// Provider functions
 async function getFilemoonLinks(providerPath) {
   const links = [];
   try {
@@ -107,10 +100,7 @@ async function getLinks(providerPath) {
     
     if (Array.isArray(data?.links)) {
       for (const l of data.links) {
-        const url = l.link;
-        const res = l.resolutionStr || 'unknown';
-        if (!url) continue;
-        links.push({ resolution: res, url });
+        if (l.link) links.push({ resolution: l.resolutionStr || 'unknown', url: l.link });
       }
     }
     if (data?.hls?.url) links.push({ resolution: 'hls', url: data.hls.url });
@@ -141,59 +131,26 @@ function resolveSourcePath(raw) {
   return '';
 }
 
-function buildEpisodeFromBlob(plain) {
-  if (!plain) return null;
-  try {
-    const parsed = JSON.parse(plain);
-    if (parsed?.episode?.sourceUrls?.length) return { data: { episode: parsed.episode } };
-  } catch (_) {}
-  const entries = [];
-  const re = /"sourceUrl":"([^"]+)"[^{}]*?"sourceName":"([^"]+)"/g;
-  let m;
-  while ((m = re.exec(plain)) !== null) {
-    entries.push({ sourceUrl: m[1], sourceName: m[2] });
-  }
-  return entries.length ? { data: { episode: { sourceUrls: entries } } } : null;
-}
-
+// FIXED: Use GET requests with query parameters
 async function fetchEpisodeApi(showId, mode, epNo) {
   const episodeFormats = [String(epNo), String(parseFloat(epNo)), String(parseInt(epNo, 10)).padStart(2, '0'), parseFloat(epNo).toFixed(1)];
-  const queryPost = `query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls } }`;
 
   for (const epString of episodeFormats) {
     try {
       const variables = JSON.stringify({ showId, translationType: mode, episodeString: epString });
       const extensions = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: EPISODE_PERSISTED_HASH } });
       const url = `${ALLANIME_API}/api?variables=${encodeURIComponent(variables)}&extensions=${encodeURIComponent(extensions)}`;
-      const { data } = await axios.get(url, {
-        headers: {
-          'User-Agent': AGENT,
-          'Referer': 'https://youtu-chan.com',
-          'Origin': 'https://youtu-chan.com',
-        },
-        timeout: 7000,
-      });
+      
+      const { data } = await axiosInstance.get(url);
       
       if (data?.data?.tobeparsed) {
         const plain = decodeTobeparsed(data.data.tobeparsed);
-        const built = buildEpisodeFromBlob(plain);
-        if (built) return built;
-      }
-      if (Array.isArray(data?.data?.episode?.sourceUrls) && data.data.episode.sourceUrls.length) {
-        return data;
-      }
-    } catch (e) {}
-
-    try {
-      const { data } = await axiosInstance.post(`${ALLANIME_API}/api`, {
-        variables: { showId, translationType: mode, episodeString: epString },
-        query: queryPost,
-      });
-      
-      if (data?.data?.tobeparsed) {
-        const plain = decodeTobeparsed(data.data.tobeparsed);
-        const built = buildEpisodeFromBlob(plain);
-        if (built) return built;
+        if (plain) {
+          try {
+            const parsed = JSON.parse(plain);
+            if (parsed?.episode?.sourceUrls?.length) return { data: { episode: parsed.episode } };
+          } catch (_) {}
+        }
       }
       if (Array.isArray(data?.data?.episode?.sourceUrls) && data.data.episode.sourceUrls.length) {
         return data;
@@ -203,15 +160,13 @@ async function fetchEpisodeApi(showId, mode, epNo) {
   return null;
 }
 
-// ── PUBLIC API ────────────────────────────────────────────────────────────────
-
+// FIXED: Use GET requests with query parameters
 async function searchAnime(query) {
-  const queryGql = `query ($search: SearchInput) { search(search: $search) { edges { _id name englishName thumbnail description status } } }`;
   try {
-    const { data } = await axiosInstance.post(`${ALLANIME_API}/api`, {
-      variables: { search: { allowAdult: false, query, limit: 15 } },
-      query: queryGql,
-    });
+    const variables = JSON.stringify({ search: { allowAdult: false, query, limit: 15 } });
+    const url = `${ALLANIME_API}/api?variables=${encodeURIComponent(variables)}&query=query%20%28%24search%3A%20SearchInput%29%20%7B%20search%28search%3A%20%24search%29%20%7B%20edges%20%7B%20_id%20name%20englishName%20thumbnail%20description%20status%20%7D%20%7D%20%7D`;
+    
+    const { data } = await axiosInstance.get(url);
     
     const results = [];
     const edges = data?.data?.search?.edges || [];
@@ -227,16 +182,20 @@ async function searchAnime(query) {
     }
     return results;
   } catch (e) {
+    console.error('[search]', e.message);
     return [];
   }
 }
 
 async function getAnimeDetails(showId) {
-  const query = `query ($showId: String!) { show( _id: $showId ) { _id name englishName nativeName thumbnail description status availableEpisodesDetail } }`;
   try {
-    const { data } = await axiosInstance.post(`${ALLANIME_API}/api`, { variables: { showId }, query });
+    const variables = JSON.stringify({ showId });
+    const url = `${ALLANIME_API}/api?variables=${encodeURIComponent(variables)}&query=query%20%28%24showId%3A%20String%21%29%20%7B%20show%28%20_id%3A%20%24showId%20%29%20%7B%20_id%20name%20englishName%20nativeName%20thumbnail%20description%20status%20availableEpisodesDetail%20%7D%20%7D`;
+    
+    const { data } = await axiosInstance.get(url);
     const show = data?.data?.show;
     if (!show) return null;
+    
     return {
       id: show._id,
       title: show.englishName || show.name,
@@ -253,9 +212,11 @@ async function getAnimeDetails(showId) {
 }
 
 async function getEpisodesList(showId, mode = 'sub') {
-  const query = `query ($showId: String! $translationType: VaildTranslationTypeEnumType!) { episodes( showId: $showId translationType: $translationType ) { episodeString episodeIdNum } }`;
   try {
-    const { data } = await axiosInstance.post(`${ALLANIME_API}/api`, { variables: { showId, translationType: mode }, query });
+    const variables = JSON.stringify({ showId, translationType: mode });
+    const url = `${ALLANIME_API}/api?variables=${encodeURIComponent(variables)}&query=query%20%28%24showId%3A%20String%21%20%24translationType%3A%20VaildTranslationTypeEnumType%21%29%20%7B%20episodes%28%20showId%3A%20%24showId%20translationType%3A%20%24translationType%20%29%20%7B%20episodeString%20episodeIdNum%20%7D%20%7D`;
+    
+    const { data } = await axiosInstance.get(url);
     return data?.data?.episodes || [];
   } catch (e) {
     return [];
@@ -263,13 +224,17 @@ async function getEpisodesList(showId, mode = 'sub') {
 }
 
 async function getEpisodeInfo(showId, epNo) {
-  const query = `query ($showId: String!, $epNum: String!) { episodeInfos( showId: $showId episodeNum: $epNum ) { episodeIdNum notes description thumbnails } }`;
   try {
-    const { data } = await axiosInstance.post(`${ALLANIME_API}/api`, { variables: { showId, epNum: String(epNo) }, query });
+    const variables = JSON.stringify({ showId, epNum: String(epNo) });
+    const url = `${ALLANIME_API}/api?variables=${encodeURIComponent(variables)}&query=query%20%28%24showId%3A%20String%21%2C%20%24epNum%3A%20String%21%29%20%7B%20episodeInfos%28%20showId%3A%20%24showId%20episodeNum%3A%20%24epNum%20%29%20%7B%20episodeIdNum%20notes%20description%20thumbnails%20%7D%20%7D`;
+    
+    const { data } = await axiosInstance.get(url);
     const infos = data?.data?.episodeInfos;
     if (!infos || !infos.length) return null;
+    
     const info = infos[0];
     let thumbnails = (info.thumbnails || []).map(t => t.startsWith('/') ? `https://${ALLANIME_BASE}${t}` : t);
+    
     return {
       episode_no: info.episodeIdNum,
       title: info.notes || '',
@@ -340,8 +305,6 @@ async function getAvailableQualities(showId, epNo, mode = 'sub') {
     return [];
   }
 }
-
-// ── EXPORT ────────────────────────────────────────────────────────────────────
 
 module.exports = {
   searchAnime,
