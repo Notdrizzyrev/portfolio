@@ -56,10 +56,6 @@ async function searchAnime(query) {
     return results;
   } catch (e) {
     console.error('[searchAnime] ERROR:', e.message);
-    if (e.response?.status === 400) {
-      console.error('[searchAnime] 400 Bad Request');
-      console.error('[searchAnime] Response:', e.response?.data);
-    }
     return [];
   }
 }
@@ -131,11 +127,23 @@ async function getEpisodeInfo(malId, epNo) {
 }
 
 async function getEpisodeUrl(malId, epNo, mode = 'sub', quality = 'best') {
-  return null;
+  try {
+    // Jikan doesn't provide streaming links, but return a message for the frontend
+    console.log('[getEpisodeUrl] Streaming not available via Jikan API for ID:', malId, 'EP:', epNo);
+    return null;
+  } catch (e) {
+    console.error('[getEpisodeUrl] ERROR:', e.message);
+    return null;
+  }
 }
 
 async function getAvailableQualities(malId, epNo, mode = 'sub') {
-  return ['720p', '480p', '360p'];
+  try {
+    return ['720p', '480p', '360p'];
+  } catch (e) {
+    console.error('[getAvailableQualities] ERROR:', e.message);
+    return [];
+  }
 }
 
 module.exports = {
