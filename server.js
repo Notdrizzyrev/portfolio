@@ -1,30 +1,14 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const http = require('http');
-const https = require('https');
-
-// Import scraper
 const scraper = require('./scraper');
 
 const app = express();
 const PORT = process.env.PORT || 5678;
-const SELF = process.env.SELF_URL || `http://localhost:${PORT}`;
-
-// HTTP agents for connection pooling
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 50 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50 });
-
-// Cache
 const cache = new Map();
 const CACHE_TTL = 60 * 60 * 1000;
 const SHORT_CACHE_TTL = 5 * 60 * 1000;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Cache helpers
 const getCached = (k) => {
   const c = cache.get(k);
   return c && Date.now() - c.t < (c.ttl || CACHE_TTL) ? c.v : null;
@@ -34,12 +18,13 @@ const setCache = (k, v, ttl = CACHE_TTL) => {
   cache.set(k, { v, t: Date.now(), ttl });
 };
 
-// Health check
+app.use(cors());
+app.use(express.json());
+
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', uptime: process.uptime() });
 });
 
-// Search anime
 app.get('/search', async (req, res) => {
   const q = req.query.query || '';
   if (!q) return res.status(400).json({ error: 'Missing query' });
@@ -62,7 +47,6 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// Get anime details
 app.get('/anime/:id', async (req, res) => {
   try {
     const cacheKey = `anime:${req.params.id}`;
@@ -83,33 +67,6 @@ app.get('/anime/:id', async (req, res) => {
   }
 });
 
-// Dub check
-app.get('/dub-check', async (req, res) => {
-  const { show_id } = req.query;
-  if (!show_id) return res.status(400).json({ error: 'Missing show_id' });
-  
-  try {
-    const cacheKey = `dub:${show_id}`;
-    const cached = getCached(cacheKey);
-    if (cached) return res.json(cached);
-
-    const details = await Promise.race([
-      scraper.getAnimeDetails(show_id),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
-    ]);
-
-    const result = {
-      has_dub: (details?.episodes_dub || 0) > 0,
-      episodes_dub: details?.episodes_dub || 0,
-    };
-    setCache(cacheKey, result, SHORT_CACHE_TTL);
-    res.json(result);
-  } catch (e) {
-    res.json({ has_dub: false, episodes_dub: 0 });
-  }
-});
-
-// Get episodes
 app.get('/episodes/:id', async (req, res) => {
   const { id } = req.params;
   const mode = req.query.mode === 'dub' ? 'dub' : 'sub';
@@ -132,7 +89,6 @@ app.get('/episodes/:id', async (req, res) => {
   }
 });
 
-// Get episode info
 app.get('/episode_info', async (req, res) => {
   const { show_id, ep_no } = req.query;
   if (!show_id || !ep_no) return res.status(400).json({ error: 'Missing params' });
@@ -154,7 +110,6 @@ app.get('/episode_info', async (req, res) => {
   }
 });
 
-// Get episode URL (CRITICAL ENDPOINT)
 app.get('/episode_url', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: m } = req.query;
   const mode = m === 'dub' ? 'dub' : 'sub';
@@ -183,7 +138,6 @@ app.get('/episode_url', async (req, res) => {
   }
 });
 
-// Play (redirect)
 app.get('/play', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: m } = req.query;
   const mode = m === 'dub' ? 'dub' : 'sub';
@@ -203,7 +157,6 @@ app.get('/play', async (req, res) => {
   }
 });
 
-// Get qualities
 app.get('/qualities', async (req, res) => {
   const { show_id, ep_no, mode: rawMode } = req.query;
   const mode = rawMode === 'dub' ? 'dub' : 'sub';
@@ -222,7 +175,6 @@ app.get('/qualities', async (req, res) => {
   }
 });
 
-// Thumbnails
 app.post('/thumbnails', async (req, res) => {
   const ids = req.body?.ids || req.body?.mal_ids || [];
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'Invalid ids' });
@@ -257,16 +209,17 @@ app.post('/thumbnails', async (req, res) => {
   }
 });
 
-// Root
 app.get('/', (req, res) => {
   res.json({
     title: 'AnimeVault API',
     status: 'running',
     version: '4.0',
+    source: 'Jikan API',
     endpoints: {
       search: '/search?query=<query>',
       anime: '/anime/<id>',
       episodes: '/episodes/<id>?mode=sub|dub',
+      episode_info: '/episode_info?show_id=<id>&ep_no=<ep>',
       episode_url: '/episode_url?show_id=<id>&ep_no=<ep>',
       play: '/play?show_id=<id>&ep_no=<ep>',
       health: '/health',
@@ -274,18 +227,16 @@ app.get('/', (req, res) => {
   });
 });
 
-// 404
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
-// Error handler
 app.use((err, req, res, next) => {
   console.error('[Error]', err.message);
   res.status(500).json({ error: 'Server error' });
 });
 
-// Start
 const server = app.listen(PORT, () => {
   console.log(`✅ AnimeVault v4.0 on port ${PORT}`);
+  console.log(`   Source: Jikan API`);
 });
 
 process.on('SIGTERM', () => {
