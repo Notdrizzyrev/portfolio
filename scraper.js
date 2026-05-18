@@ -7,10 +7,24 @@ const ALLANIME_API = `https://api.${ALLANIME_BASE}`;
 const ALLANIME_KEY = crypto.createHash('sha256').update('Xot36i3lK3:v1').digest();
 const EPISODE_PERSISTED_HASH = 'd405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec';
 
+// Headers that mimic a real browser
+const HEADERS = {
+  'User-Agent': AGENT,
+  'Accept': '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Referer': 'https://allanime.day/',
+  'Origin': 'https://allanime.day',
+  'Connection': 'keep-alive',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-site',
+};
+
 const axiosInstance = axios.create({
   timeout: 8000,
   maxRedirects: 3,
-  headers: { 'User-Agent': AGENT }
+  headers: HEADERS
 });
 
 // Decode functions
@@ -131,7 +145,6 @@ function resolveSourcePath(raw) {
   return '';
 }
 
-// FIXED: Use GET requests with query parameters
 async function fetchEpisodeApi(showId, mode, epNo) {
   const episodeFormats = [String(epNo), String(parseFloat(epNo)), String(parseInt(epNo, 10)).padStart(2, '0'), parseFloat(epNo).toFixed(1)];
 
@@ -160,7 +173,6 @@ async function fetchEpisodeApi(showId, mode, epNo) {
   return null;
 }
 
-// FIXED: Use GET requests with query parameters
 async function searchAnime(query) {
   try {
     const variables = JSON.stringify({ search: { allowAdult: false, query, limit: 15 } });
