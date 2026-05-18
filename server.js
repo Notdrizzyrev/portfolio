@@ -5,14 +5,13 @@ const axios = require('axios');
 const http = require('http');
 const https = require('https');
 
-// Import scraper
 const scraper = require('./scraper');
 
 const app = express();
 const PORT = process.env.PORT || 5678;
 const SELF = process.env.SELF_URL || 'https://animevault-backend-production.up.railway.app';
 
-// HTTP agents for connection pooling
+// HTTP agents
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 50 });
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50, rejectUnauthorized: false });
 
@@ -25,10 +24,16 @@ const axiosInstance = axios.create({
   }
 });
 
+// Video headers for streaming
+const VIDEO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  'Referer': 'https://allanime.day/'
+};
+
 // Cache
 const cache = new Map();
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const SHORT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 60 * 60 * 1000;
+const SHORT_CACHE_TTL = 5 * 60 * 1000;
 
 // Middleware
 app.use(cors({
@@ -169,7 +174,7 @@ app.get('/episode_info', async (req, res) => {
   }
 });
 
-// Get episode URL (returns direct URL)
+// Get episode URL
 app.get('/episode_url', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: m } = req.query;
   const mode = m === 'dub' ? 'dub' : 'sub';
@@ -198,7 +203,7 @@ app.get('/episode_url', async (req, res) => {
   }
 });
 
-// VIDEO PROXY - Streams video with proper CORS headers
+// VIDEO PROXY
 app.get('/video-proxy', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'Missing url parameter' });
@@ -211,13 +216,9 @@ app.get('/video-proxy', async (req, res) => {
       responseType: 'stream',
       timeout: 30000,
       maxRedirects: 5,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://example.com/'
-      }
+      headers: VIDEO_HEADERS
     });
 
-    // Set proper headers for video playback
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
@@ -247,7 +248,7 @@ app.get('/video-proxy', async (req, res) => {
   }
 });
 
-// PLAY endpoint - returns proxied URL
+// PLAY endpoint
 app.get('/play', async (req, res) => {
   const { show_id, ep_no, quality = 'best', mode: m } = req.query;
   const mode = m === 'dub' ? 'dub' : 'sub';
@@ -264,7 +265,6 @@ app.get('/play', async (req, res) => {
       return res.status(404).json({ error: 'No stream available' });
     }
 
-    // Return a proxy URL instead of direct URL to avoid CORS issues
     const proxyUrl = `${SELF}/video-proxy?url=${encodeURIComponent(url)}`;
     res.json({ play_url: proxyUrl, direct_url: url });
   } catch (e) {
@@ -299,7 +299,7 @@ app.post('/thumbnails', async (req, res) => {
   
   try {
     const results = {};
-    for (const id of ids.slice(0, 50)) {
+    const promises = ids.slice(0, 50).map(async (id) => {
       try {
         const cacheKey = `thumb:${id}`;
         const cached = getCached(cacheKey);
@@ -320,56 +320,104 @@ app.post('/thumbnails', async (req, res) => {
       } catch (e) {
         console.warn(`[thumbnails] ${id}:`, e.message);
       }
-    }
+    });
+
+    await Promise.all(promises);
     res.json(results);
   } catch (e) {
+    console.error('[thumbnails] Error:', e.message);
     res.json({});
   }
 });
 
-// Root endpoint
+// HLS PROXY
+app.get('/hls-proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing url parameter' });
+
+  try {
+    const decoded = decodeURIComponent(url);
+    const headers = { ...VIDEO_HEADERS };
+
+    if (decoded.includes('gogoanime') || decoded.includes('playtaku')) {
+      headers['Referer'] = 'https://gogoanime.cl/';
+      headers['Origin'] = 'https://gogoanime.cl';
+    } else if (decoded.includes('megacloud') || decoded.includes('rapidcloud')) {
+      headers['Referer'] = 'https://megacloud.tv/';
+      headers['Origin'] = 'https://megacloud.tv';
+    }
+
+    const segResp = await axiosInstance.get(decoded, {
+      headers,
+      responseType: 'stream',
+      timeout: 15000,
+      maxRedirects: 3,
+    });
+
+    res.setHeader('Access-Control-Allow-Origin', req.headers['origin'] || '*');
+    res.setHeader('Content-Type', segResp.headers['content-type'] || 'video/mp2t');
+    segResp.data.pipe(res);
+    res.on('close', () => segResp.data.destroy());
+  } catch (e) {
+    console.warn('[HLS-proxy] Failed:', e.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Failed to proxy video', details: e.message });
+    }
+  }
+});
+
+// ROOT ENDPOINT
 app.get('/', (req, res) => {
   res.json({
     title: 'AnimeVault API',
     status: 'running',
-    version: '4.1',
+    version: '4.2 (Fixed)',
     source: 'Jikan API + Google CDN',
     self_url: SELF,
+    cache_status: {
+      entries: cache.size,
+      ttl_1h: 'anime details',
+      ttl_5m: 'search, episodes, urls'
+    },
     endpoints: {
       search: '/search?query=<query>',
       anime_details: '/anime/<id>',
+      dub_check: '/dub-check?show_id=<id>',
       episodes: '/episodes/<id>?mode=sub|dub',
-      episode_url: '/episode_url?show_id=<id>&ep_no=<ep>&quality=best',
-      play: '/play?show_id=<id>&ep_no=<ep>',
+      episode_info: '/episode_info?show_id=<id>&ep_no=<ep_no>',
+      episode_url: '/episode_url?show_id=<id>&ep_no=<ep>&quality=<q>&mode=sub|dub',
+      play: '/play?show_id=<id>&ep_no=<ep>&quality=<q>&mode=sub|dub',
       video_proxy: '/video-proxy?url=<encoded_url>',
-      qualities: '/qualities?show_id=<id>&ep_no=<ep>',
-      thumbnails: '/thumbnails (POST)',
-      health: '/health'
+      qualities: '/qualities?show_id=<id>&ep_no=<ep>&mode=sub|dub',
+      thumbnails: '/thumbnails (POST with {ids: []})',
+      hls_proxy: '/hls-proxy?url=<encoded_url>',
+      health: '/health',
     }
   });
 });
 
-// 404 handler
+// 404 HANDLER
 app.use((req, res) => {
-  res.status(404).json({ error: 'Not found', path: req.path });
+  res.status(404).json({ error: 'Endpoint not found', path: req.path });
 });
 
-// Error handler
+// ERROR HANDLING
 app.use((err, req, res, next) => {
-  console.error('[Error]', err.message);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error('[Error]', err);
+  res.status(500).json({ error: 'Internal server error', message: err.message });
 });
 
-// Start server
+// START SERVER
 const server = app.listen(PORT, () => {
-  console.log(`✅ AnimeVault v4.1 running on port ${PORT}`);
+  console.log(`✅ AnimeVault backend v4.2 running on port ${PORT}`);
   console.log(`   Self URL: ${SELF}`);
   console.log(`   Features: CORS proxy, video streaming, smart caching`);
 });
 
 process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
   server.close(() => {
-    console.log('Server closed');
+    console.log('HTTP server closed');
     process.exit(0);
   });
 });
