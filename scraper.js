@@ -2,13 +2,48 @@ const axios = require('axios');
 
 const JIKAN_API = 'https://api.jikan.moe/v4';
 
+// Rate limiting
+let lastRequestTime = 0;
+const MIN_REQUEST_DELAY = 300; // 300ms between requests
+
+async function delayIfNeeded() {
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
+    await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_DELAY - timeSinceLastRequest));
+  }
+  lastRequestTime = Date.now();
+}
+
 const axiosInstance = axios.create({
-  timeout: 12000,
+  timeout: 15000,
   maxRedirects: 3,
   headers: {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
   }
 });
+
+// Retry logic
+async function retryRequest(fn, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      await delayIfNeeded();
+      return await fn();
+    } catch (e) {
+      if (e.response?.status === 429 && i < maxRetries - 1) {
+        const delay = 1000 * (i + 1);
+        console.log(`[retry] 429 Rate Limited, waiting ${delay}ms before retry ${i + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else if (e.response?.status === 500 && i < maxRetries - 1) {
+        const delay = 500 * (i + 1);
+        console.log(`[retry] 500 Server Error, waiting ${delay}ms before retry ${i + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw e;
+      }
+    }
+  }
+}
 
 async function searchAnime(query) {
   try {
@@ -20,12 +55,14 @@ async function searchAnime(query) {
     const trimmedQuery = query.trim();
     console.log('[searchAnime] Searching for:', trimmedQuery);
     
-    const response = await axiosInstance.get(`${JIKAN_API}/anime`, {
-      params: {
-        query: trimmedQuery,
-        limit: 15
-      }
-    });
+    const response = await retryRequest(() => 
+      axiosInstance.get(`${JIKAN_API}/anime`, {
+        params: {
+          query: trimmedQuery,
+          limit: 15
+        }
+      })
+    );
 
     console.log('[searchAnime] API Response status:', response.status);
     
@@ -65,7 +102,9 @@ async function getAnimeDetails(malId) {
     if (!malId) return null;
     
     console.log('[getAnimeDetails] Fetching ID:', malId);
-    const response = await axiosInstance.get(`${JIKAN_API}/anime/${malId}`);
+    const response = await retryRequest(() =>
+      axiosInstance.get(`${JIKAN_API}/anime/${malId}`)
+    );
     
     if (!response.data?.data) return null;
     
@@ -92,15 +131,24 @@ async function getAnimeDetails(malId) {
 
 async function getEpisodesList(malId, mode = 'sub') {
   try {
-    const response = await axiosInstance.get(`${JIKAN_API}/anime/${malId}/episodes`);
+    console.log('[getEpisodesList] Fetching episodes for ID:', malId);
+    const response = await retryRequest(() =>
+      axiosInstance.get(`${JIKAN_API}/anime/${malId}/episodes`)
+    );
     
-    if (!response.data?.data || !Array.isArray(response.data.data)) return [];
+    if (!response.data?.data || !Array.isArray(response.data.data)) {
+      console.log('[getEpisodesList] No episodes found');
+      return [];
+    }
     
-    return response.data.data.map((ep, idx) => ({
+    const episodes = response.data.data.map((ep, idx) => ({
       episodeString: String(ep.mal_id || idx + 1),
       episodeIdNum: idx + 1,
       title: ep.title || `Episode ${idx + 1}`
     }));
+    
+    console.log('[getEpisodesList] Returning', episodes.length, 'episodes');
+    return episodes;
   } catch (e) {
     console.error('[getEpisodesList] ERROR:', e.message);
     return [];
@@ -109,7 +157,10 @@ async function getEpisodesList(malId, mode = 'sub') {
 
 async function getEpisodeInfo(malId, epNo) {
   try {
-    const response = await axiosInstance.get(`${JIKAN_API}/anime/${malId}/episodes/${epNo}`);
+    console.log('[getEpisodeInfo] Fetching info for ID:', malId, 'EP:', epNo);
+    const response = await retryRequest(() =>
+      axiosInstance.get(`${JIKAN_API}/anime/${malId}/episodes/${epNo}`)
+    );
     
     if (!response.data?.data) return null;
     
@@ -128,7 +179,6 @@ async function getEpisodeInfo(malId, epNo) {
 
 async function getEpisodeUrl(malId, epNo, mode = 'sub', quality = 'best') {
   try {
-    // Jikan doesn't provide streaming links, but return a message for the frontend
     console.log('[getEpisodeUrl] Streaming not available via Jikan API for ID:', malId, 'EP:', epNo);
     return null;
   } catch (e) {
