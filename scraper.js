@@ -23,8 +23,7 @@ async function searchAnime(query) {
     const response = await axiosInstance.get(`${JIKAN_API}/anime`, {
       params: {
         query: trimmedQuery,
-        limit: 15,
-        status: 'airing,complete'
+        limit: 15
       }
     });
 
@@ -58,11 +57,8 @@ async function searchAnime(query) {
   } catch (e) {
     console.error('[searchAnime] ERROR:', e.message);
     if (e.response?.status === 400) {
-      console.error('[searchAnime] 400 Bad Request - check query params');
+      console.error('[searchAnime] 400 Bad Request');
       console.error('[searchAnime] Response:', e.response?.data);
-    }
-    if (e.response?.status === 429) {
-      console.error('[searchAnime] 429 Rate Limited');
     }
     return [];
   }
