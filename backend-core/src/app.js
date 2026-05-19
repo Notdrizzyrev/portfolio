@@ -8,6 +8,7 @@ import watchlistRoutes from './routes/watchlistRoutes.js';
 import progressRoutes from './routes/progressRoutes.js';
 import settingsRoutes from './routes/settingsRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import animeRoutes from './routes/animeRoutes.js';  // ADD THIS LINE
 import { errorHandler, notFound } from './middleware/errorMiddleware.js';
 
 const app = express();
@@ -59,6 +60,7 @@ const authLimiter = rateLimit({
 });
 
 app.use('/auth', authLimiter, authRoutes);
+app.use('/api', animeRoutes);  // ADD THIS LINE
 app.use('/watchlist', watchlistRoutes);
 app.use('/progress', progressRoutes);
 app.use('/settings', settingsRoutes);
