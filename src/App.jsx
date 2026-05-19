@@ -1,64 +1,66 @@
-import { useState, useEffect } from 'react'
-import './App.css'
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import Navbar from './components/layout/Navbar';
+import Footer from './components/layout/Footer';
 
-const BACKEND_URL = import.meta.env.VITE_PYTHON_API || 'http://localhost:5000'
+// Pages
+import Home from './pages/Home';
+import Browse from './pages/Browse';
+import AnimeDetails from './pages/AnimeDetails';
+import Watch from './pages/Watch';
+import Watchlist from './pages/Watchlist';
+import Profile from './pages/Profile';
+import Schedule from './pages/Schedule';
 
-export default function App() {
-  const [status, setStatus] = useState('loading')
-  const [message, setMessage] = useState('')
-  const [backendUrl, setBackendUrl] = useState(BACKEND_URL)
-
-  useEffect(() => {
-    checkBackendHealth()
-  }, [])
-
-  const checkBackendHealth = async () => {
-    try {
-      const response = await fetch(`${BACKEND_URL}/health`)
-      const data = await response.json()
-      setStatus('success')
-      setMessage(data.status || 'Connected to backend!')
-    } catch (error) {
-      setStatus('error')
-      setMessage(`Cannot connect to backend: ${error.message}`)
-    }
-  }
-
+// Auth Pages (simple placeholders)
+function Portal() {
   return (
-    <div className="app">
-      <div className="container">
-        <div className="logo">🎌</div>
-        <h1>AniVault</h1>
-        <p className="subtitle">Anime Streaming Platform</p>
-
-        <div className={`status-card ${status}`}>
-          <div className="status-icon">
-            {status === 'loading' && '⏳'}
-            {status === 'success' && '✅'}
-            {status === 'error' && '❌'}
-          </div>
-          <div className="status-content">
-            <h2>Backend Status</h2>
-            <p>{message}</p>
-            <p className="url">Backend: {backendUrl}</p>
-          </div>
-        </div>
-
-        <div className="features">
-          <h3>Features Coming Soon:</h3>
-          <ul>
-            <li>🎬 Browse Anime</li>
-            <li>⭐ Watchlist</li>
-            <li>📊 Progress Tracking</li>
-            <li>⚙️ User Settings</li>
-            <li>🔔 Notifications</li>
-          </ul>
-        </div>
-
-        <button onClick={checkBackendHealth} className="btn">
-          Check Backend Again
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+      <div className="bg-gray-900 rounded-lg p-8 max-w-md w-full">
+        <h1 className="text-3xl font-bold text-white mb-6">Login / Register</h1>
+        <input type="email" placeholder="Email" className="w-full mb-4 px-4 py-2 bg-gray-800 text-white rounded" />
+        <input type="password" placeholder="Password" className="w-full mb-6 px-4 py-2 bg-gray-800 text-white rounded" />
+        <button className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded font-semibold transition">
+          Login
         </button>
+        <p className="text-gray-400 text-center mt-4">Don't have an account? <a href="#" className="text-purple-400">Sign up</a></p>
       </div>
     </div>
-  )
+  );
+}
+
+function AppContent() {
+  const location = useLocation();
+  const isPortalPage = location.pathname === '/portal';
+
+  return (
+    <div className="flex flex-col min-h-screen">
+      {!isPortalPage && <Navbar onSearch={() => {}} />}
+      
+      <main className="flex-grow">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/browse" element={<Browse />} />
+          <Route path="/anime/:id" element={<AnimeDetails />} />
+          <Route path="/watch/:id" element={<Watch />} />
+          <Route path="/watchlist" element={<Watchlist />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/schedule" element={<Schedule />} />
+          <Route path="/portal" element={<Portal />} />
+        </Routes>
+      </main>
+
+      {!isPortalPage && <Footer />}
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Router>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </Router>
+  );
 }
