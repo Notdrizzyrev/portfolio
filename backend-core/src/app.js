@@ -16,8 +16,25 @@ app.use(helmet({
   crossOriginResourcePolicy: false,
 }));
 
+// CORS Configuration - Updated for Cloudflare deployment
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: function (origin, callback) {
+    // List of allowed origins
+    const allowedOrigins = [
+      process.env.CORS_ORIGIN,
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://localhost:8080',
+      'https://anivault.is-pro.dev',
+    ].filter(Boolean); // Remove undefined values
+
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
