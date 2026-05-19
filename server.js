@@ -1,4 +1,3 @@
-
 import app from './backend-core/src/app.js';
 import connectDB from './backend-core/src/config/db.js';
 
