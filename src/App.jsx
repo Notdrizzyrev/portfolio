@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/layout/Navbar';
 import Footer from './components/layout/Footer';
+import BackendStatusChecker from './components/common/BackendStatusChecker';
 
 // Pages
 import Home from './pages/Home';
@@ -35,6 +36,8 @@ function AppContent() {
 
   return (
     <div className="flex flex-col min-h-screen">
+      <BackendStatusChecker />
+      
       {!isPortalPage && <Navbar onSearch={() => {}} />}
       
       <main className="flex-grow">
