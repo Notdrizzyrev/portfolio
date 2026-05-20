@@ -10,9 +10,9 @@ export default function Footer() {
           <div>
             <h3 className="text-white font-bold mb-4">About</h3>
             <ul className="space-y-2 text-gray-400 text-sm">
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">About Us</button></li>
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">Blog</button></li>
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">Careers</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">About Us</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">Blog</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">Careers</button></li>
             </ul>
           </div>
           <div>
@@ -20,15 +20,15 @@ export default function Footer() {
             <ul className="space-y-2 text-gray-400 text-sm">
               <li><button onClick={() => handleExternalLink('https://discord.gg/d9nZMQRtHw')} className="hover:text-white transition">Help Center</button></li>
               <li><button onClick={() => handleExternalLink('https://discord.gg/d9nZMQRtHw')} className="hover:text-white transition">Contact</button></li>
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">Status</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">Status</button></li>
             </ul>
           </div>
           <div>
             <h3 className="text-white font-bold mb-4">Legal</h3>
             <ul className="space-y-2 text-gray-400 text-sm">
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">Privacy</button></li>
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">Terms</button></li>
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">DMCA</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">Privacy</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">Terms</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">DMCA</button></li>
             </ul>
           </div>
           <div>
@@ -36,7 +36,7 @@ export default function Footer() {
             <ul className="space-y-2 text-gray-400 text-sm">
               <li><button onClick={() => handleExternalLink('https://twitter.com')} className="hover:text-white transition">Twitter</button></li>
               <li><button onClick={() => handleExternalLink('https://discord.gg/d9nZMQRtHw')} className="hover:text-white transition">Discord</button></li>
-              <li><button onClick={() => handleExternalLink('https://github.com/Notdrizzyrev/animevault-backend')} className="hover:text-white transition">GitHub</button></li>
+              <li><button onClick={() => alert('Coming Soon!')} className="hover:text-white transition">YouTube</button></li>
             </ul>
           </div>
         </div>
