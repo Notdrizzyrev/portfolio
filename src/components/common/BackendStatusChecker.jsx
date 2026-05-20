@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 
 export default function BackendStatusChecker() {
   const [bothDown, setBothDown] = useState(false);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const checkBackends = async () => {
@@ -11,10 +10,10 @@ export default function BackendStatusChecker() {
         let primaryUp = false;
         let supabaseUp = false;
 
-        // Check primary backend with timeout
+        // Check primary backend
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
           
           const res1 = await fetch(`${primaryBackend}/health`, { 
             method: 'GET',
@@ -26,37 +25,40 @@ export default function BackendStatusChecker() {
           primaryUp = false;
         }
 
-        // Check Supabase (just try to fetch - if it responds, it's up)
+        // Check Supabase
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
           
-          const res2 = await fetch('https://zpgryifvnzujooaekfdu.supabase.co/rest/v1/', { 
+          await fetch('https://zpgryifvnzujooaekfdu.supabase.co/rest/v1/health', { 
             method: 'GET',
             signal: controller.signal
           });
           clearTimeout(timeoutId);
-          supabaseUp = true; // If we get any response, it's up
+          supabaseUp = true;
         } catch (e) {
           supabaseUp = false;
         }
 
-        // If both are down, show error
-        setBothDown(!primaryUp && !supabaseUp);
+        // Only show error if BOTH are down
+        const bothAreDown = !primaryUp && !supabaseUp;
+        setBothDown(bothAreDown);
       } catch (error) {
         console.log('Status check error:', error);
-      } finally {
-        setLoading(false);
       }
     };
 
-    checkBackends();
-    // Check every 30 seconds
-    const interval = setInterval(checkBackends, 30000);
-    return () => clearInterval(interval);
+    // Check after 10 seconds (give servers time to respond)
+    const initialTimer = setTimeout(checkBackends, 10000);
+    
+    // Then check every 60 seconds
+    const interval = setInterval(checkBackends, 60000);
+    
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
   }, []);
-
-  if (loading) return null;
 
   if (bothDown) {
     return (
