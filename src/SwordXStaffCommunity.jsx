@@ -27,6 +27,13 @@ export default function SwordXStaffCommunity() {
   const [showLogs, setShowLogs] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sectionNotes, setSectionNotes] = useState({
+    codes: 'Redeem codes in-game at: Home → Main Menu → User Center → Gift Code',
+    classes: 'Learn about our different classes and their abilities',
+    events: 'Check out upcoming events and special occasions',
+    guide: 'Read our guides to get started',
+  });
+  const [editingNoteSection, setEditingNoteSection] = useState(null);
 
   // ── Edit form scroll ref (fixes the "edit button does nothing" bug) ─────────
   const editFormRef = useRef(null);
@@ -113,6 +120,16 @@ export default function SwordXStaffCommunity() {
         setCustomSectionItems(JSON.parse(savedCustomItems));
       } catch (e) {
         console.error('Failed to restore custom items:', e);
+      }
+    }
+
+    // Restore all section notes from localStorage
+    const savedSectionNotes = localStorage.getItem('sectionNotes');
+    if (savedSectionNotes) {
+      try {
+        setSectionNotes(JSON.parse(savedSectionNotes));
+      } catch (e) {
+        console.error('Failed to restore section notes:', e);
       }
     }
   }, []);
@@ -464,6 +481,14 @@ export default function SwordXStaffCommunity() {
     reader.readAsDataURL(file);
   }, []);
 
+  // ── SAVE CODES NOTE ───────────────────────────────────────────────────────
+  const saveCodesNote = useCallback((sectionId) => {
+    const updated = { ...sectionNotes };
+    localStorage.setItem('sectionNotes', JSON.stringify(updated));
+    setEditingNoteSection(null);
+    logAction('EDIT', 'SECTION_NOTE', sectionId, `Updated ${sectionId} note`);
+  }, [sectionNotes, logAction]);
+
   // ── Shared form styles ─────────────────────────────────────────────────────
   const inputCls = 'px-4 py-2 bg-slate-700 border border-amber-600/30 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-full';
 
@@ -486,6 +511,43 @@ export default function SwordXStaffCommunity() {
       </div>
     </div>
   ), [saving, cancelEdit]);
+
+  // ── SECTION NOTE COMPONENT (REUSABLE FOR ALL SECTIONS) ─────────────────────
+  const SectionNote = useCallback(({ sectionId }) => (
+    <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+            {/* Using SectionNote component below */}
+      {editingNoteSection === sectionId && isAdmin ? (
+        <div className="space-y-3">
+          <textarea 
+            className={inputCls} 
+            value={sectionNotes[sectionId] || ''}
+            onChange={(e) => setSectionNotes({ ...sectionNotes, [sectionId]: e.target.value })}
+            rows="3"
+          />
+          <div className="flex gap-2">
+            <button onClick={() => saveCodesNote(sectionId)} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold text-sm flex items-center gap-2">
+              <Save size={16} /> Save
+            </button>
+            <button onClick={() => setEditingNoteSection(null)} className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-blue-200 text-sm flex items-start gap-2 flex-1">
+            <span className="flex-shrink-0 mt-0.5">ℹ️</span>
+            <span>{sectionNotes[sectionId]}</span>
+          </p>
+          {isAdmin && (
+            <button onClick={() => setEditingNoteSection(sectionId)} className="px-3 py-1 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1 flex-shrink-0">
+              <Edit3 size={14} /> Edit
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  ), [editingNoteSection, isAdmin, sectionNotes, inputCls, saveCodesNote]);
 
   // ── SECTIONS VISIBILITY LOGIC ────────────────────────────────────────────
   const displaySections = useMemo(() => {
@@ -651,6 +713,8 @@ export default function SwordXStaffCommunity() {
                 </button>
               )}
             </div>
+            <SectionNote sectionId="classes" />
+
 
             {isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (
               <EditForm title={editingId ? 'Edit Class' : 'Add New Class'} onSave={saveClass}>
@@ -725,6 +789,8 @@ export default function SwordXStaffCommunity() {
                 </button>
               )}
             </div>
+
+            <SectionNote sectionId="events" />
 
             {isAdmin && (addingNew === 'event' || editingId?.startsWith('event-')) && (
               <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
@@ -812,12 +878,7 @@ export default function SwordXStaffCommunity() {
               </EditForm>
             )}
 
-            <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-              <p className="text-blue-200 text-sm flex items-start gap-2">
-                <span className="flex-shrink-0 mt-0.5">ℹ️</span>
-                <span>Redeem codes in-game at: <strong>Home → Main Menu → User Center → Gift Code</strong></span>
-              </p>
-            </div>
+            <SectionNote sectionId="codes" />
 
             <div className="grid gap-4">
               {codes.map((code) => (
@@ -868,6 +929,8 @@ export default function SwordXStaffCommunity() {
                 </button>
               )}
             </div>
+
+            <SectionNote sectionId="guide" />
 
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
