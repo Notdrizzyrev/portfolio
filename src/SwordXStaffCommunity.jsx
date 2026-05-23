@@ -37,10 +37,10 @@ export default function SwordXStaffCommunity() {
   const [events, setEvents] = useState([]);
   const [guides, setGuides] = useState([]);
   const [sections, setSections] = useState([
-    { id: 'classes', name: 'Classes', visible: true },
-    { id: 'events', name: 'Events', visible: true },
-    { id: 'codes', name: 'Codes', visible: true },
-    { id: 'guide', name: 'Guide', visible: true },
+    { id: 'classes', name: 'Classes', visible: true, notes: '' },
+    { id: 'events', name: 'Events', visible: true, notes: '' },
+    { id: 'codes', name: 'Codes', visible: true, notes: 'Note: How to Redeem codes in-game go to Home → Main Menu → User Center → Gift Code' },
+    { id: 'guide', name: 'Guide', visible: true, notes: '' },
   ]);
 
   // ── Admin State ────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ export default function SwordXStaffCommunity() {
       setSections(prevSections => {
         const updated = prevSections.map(s =>
           s.id === editingSectionId
-            ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
+            ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible, notes: sectionFormData.notes || '' }
             : s
         );
         logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
@@ -360,7 +360,7 @@ export default function SwordXStaffCommunity() {
       });
     } else {
       const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
-      const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
+      const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible, notes: sectionFormData.notes || '' };
       setSections(prevSections => {
         logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
         return [...prevSections, newSection];
@@ -579,6 +579,12 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
+            {sections.find(s => s.id === 'classes')?.notes && (
+              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'classes')?.notes}</p>
+              </div>
+            )}
+
             {isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (
               <EditForm title={editingId ? 'Edit Class' : 'Add New Class'} onSave={saveClass}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => handleFormDataChange('name', e.target.value)} />
@@ -645,6 +651,12 @@ export default function SwordXStaffCommunity() {
                 </button>
               )}
             </div>
+
+            {sections.find(s => s.id === 'events')?.notes && (
+              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'events')?.notes}</p>
+              </div>
+            )}
 
             {isAdmin && (addingNew === 'event' || editingId?.startsWith('event-')) && (
               <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
@@ -717,20 +729,11 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
-            {isAdmin && (addingNew === 'code' || editingId?.startsWith('code-')) && (
-              <EditForm title={editingId ? 'Edit Code' : 'Add New Code'} onSave={saveCode}>
-                <input className={`col-span-2 ${inputCls} font-mono`} placeholder="Code (e.g., SXSPARTNER)" value={formData.code || ''} onChange={e => handleFormDataChange('code', e.target.value.toUpperCase())} />
-                <input className={`col-span-2 ${inputCls}`} placeholder="Reward description" value={formData.reward || ''} onChange={e => handleFormDataChange('reward', e.target.value)} />
-                <input className={`col-span-2 ${inputCls}`} placeholder="Location (e.g., In-Game)" value={formData.location || ''} onChange={e => handleFormDataChange('location', e.target.value)} />
-              </EditForm>
+            {sections.find(s => s.id === 'codes')?.notes && (
+              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'codes')?.notes}</p>
+              </div>
             )}
-
-            <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-              <p className="text-blue-200 text-sm flex items-start gap-2">
-                <span className="flex-shrink-0 mt-0.5">ℹ️</span>
-                <span>Redeem codes in-game at: <strong>Home → Main Menu → User Center → Gift Code</strong></span>
-              </p>
-            </div>
 
             <div className="grid gap-4">
               {codes.map((code) => (
@@ -782,6 +785,12 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
+            {sections.find(s => s.id === 'guide')?.notes && (
+              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'guide')?.notes}</p>
+              </div>
+            )}
+
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
@@ -813,6 +822,21 @@ export default function SwordXStaffCommunity() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── CUSTOM SECTIONS ── */}
+        {activeTab !== 'classes' && activeTab !== 'events' && activeTab !== 'codes' && activeTab !== 'guide' && activeTab !== 'settings' && (
+          <div className="space-y-6">
+            <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent capitalize">{sections.find(s => s.id === activeTab)?.name}</h2>
+            {sections.find(s => s.id === activeTab)?.notes && (
+              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5">
+                <p className="text-blue-200 text-sm">{sections.find(s => s.id === activeTab)?.notes}</p>
+              </div>
+            )}
+            <div className="text-center py-12">
+              <p className="text-slate-400 text-lg">This is a custom section.</p>
+            </div>
           </div>
         )}
 
@@ -860,6 +884,12 @@ export default function SwordXStaffCommunity() {
                       placeholder="Section Name (e.g., Shop, Events, Patch Notes)"
                       value={sectionFormData.name || ''}
                       onChange={e => handleSectionFormChange('name', e.target.value)}
+                    />
+                    <textarea
+                      className={`${inputCls} h-24`}
+                      placeholder="Section Note (Optional) - e.g., 'Note: How to Redeem codes in-game go to Home → Main Menu → User Center → Gift Code'"
+                      value={sectionFormData.notes || ''}
+                      onChange={e => handleSectionFormChange('notes', e.target.value)}
                     />
                     <div className="flex items-center gap-3 bg-slate-700/30 p-3 rounded-lg">
                       <input
