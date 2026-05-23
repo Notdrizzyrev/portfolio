@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Copy, Check, LogOut, Edit3, Save, X, Plus, Trash2, Lock, Eye, EyeOff, ChevronDown, Settings, Loader2 } from 'lucide-react';
 
 // ─── Backend API URL ─────────────────────────────────────────────────────────
@@ -36,8 +36,7 @@ export default function SwordXStaffCommunity() {
   const [classes, setClasses] = useState([]);
   const [events, setEvents] = useState([]);
   const [guides, setGuides] = useState([]);
-
-  const [sections] = useState([
+  const [sections, setSections] = useState([
     { id: 'classes', name: 'Classes', visible: true },
     { id: 'events', name: 'Events', visible: true },
     { id: 'codes', name: 'Codes', visible: true },
@@ -48,12 +47,15 @@ export default function SwordXStaffCommunity() {
   const [editingId, setEditingId] = useState(null);
   const [addingNew, setAddingNew] = useState(null);
   const [formData, setFormData] = useState({});
+  const [editingSectionId, setEditingSectionId] = useState(null);
+  const [sectionFormData, setSectionFormData] = useState({});
+  const [addingNewSection, setAddingNewSection] = useState(false);
 
   const ADMIN_PASSWORD = 'SxSSwordXStaffAdminYoutubeKingAuraFarmingWebsiteWeOwnOnlyAdminsDONTLETPEOPLEUSETHISATALLLEAKTHISUWILLGETPERMBANND';
   const MAX_ATTEMPTS = 3;
   const LOCKOUT_DURATION = 300;
 
-  // ── FIX #1: Load all data on mount with proper dependency array ────────────
+  // ── Load all data on mount with proper dependency array ────────────────────
   useEffect(() => {
     async function load() {
       try {
@@ -75,17 +77,15 @@ export default function SwordXStaffCommunity() {
       }
     }
     load();
-  }, []); // ← ADDED DEPENDENCY ARRAY - This prevents excessive re-renders
+  }, []);
 
-  // ── FIX #2: Restore admin session on mount ONLY ────────────────────────────
+  // ── Restore admin session on mount ONLY ────────────────────────────────────
   useEffect(() => {
-    // Restore admin session from localStorage
     const savedAdmin = localStorage.getItem('isAdmin') === 'true';
     if (savedAdmin) {
       setIsAdmin(true);
     }
 
-    // Restore admin logs from localStorage
     const savedLogs = localStorage.getItem('adminLogs');
     if (savedLogs) {
       try {
@@ -94,7 +94,7 @@ export default function SwordXStaffCommunity() {
         console.error('Failed to restore logs:', e);
       }
     }
-  }, []); // ← ONLY run on mount - prevents infinite loops
+  }, []);
 
   // ── Scroll edit form into view whenever it opens ───────────────────────────
   useEffect(() => {
@@ -105,7 +105,16 @@ export default function SwordXStaffCommunity() {
     }
   }, [editingId, addingNew]);
 
-  const logAction = (actionType, category, itemName, details = '') => {
+  // ── Memoized callback for form data updates ────────────────────────────────
+  const handleFormDataChange = useCallback((key, value) => {
+    setFormData(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleSectionFormChange = useCallback((key, value) => {
+    setSectionFormData(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const logAction = useCallback((actionType, category, itemName, details = '') => {
     const timestamp = new Date();
     const newLog = {
       id: adminLogs.length + 1,
@@ -116,12 +125,12 @@ export default function SwordXStaffCommunity() {
     const updatedLogs = [newLog, ...adminLogs];
     setAdminLogs(updatedLogs);
     localStorage.setItem('adminLogs', JSON.stringify(updatedLogs));
-  };
+  }, [adminLogs.length]);
 
-  const handleLogin = () => {
+  const handleLogin = useCallback(() => {
     if (lockoutTime > 0) { alert(`Try again in ${lockoutTime}s`); return; }
     if (password === ADMIN_PASSWORD) {
-      setIsAdmin(true); 
+      setIsAdmin(true);
       localStorage.setItem('isAdmin', 'true');
       setShowLogin(false); setPassword('');
       setFailedAttempts(0); setLockoutTime(0);
@@ -138,40 +147,39 @@ export default function SwordXStaffCommunity() {
         alert(`❌ Incorrect. Attempts remaining: ${MAX_ATTEMPTS - n}`);
       }
     }
-  };
+  }, [password, failedAttempts, lockoutTime]);
 
-  const handleLogout = () => {
-    setIsAdmin(false); 
+  const handleLogout = useCallback(() => {
+    setIsAdmin(false);
     localStorage.removeItem('isAdmin');
-    // Keep adminLogs - they should persist even after logout
     setPassword('');
     setEditingId(null); setAddingNew(null); setFormData({});
-  };
+  }, []);
 
-  const cancelEdit = () => { setEditingId(null); setAddingNew(null); setFormData({}); };
+  const cancelEdit = useCallback(() => { setEditingId(null); setAddingNew(null); setFormData({}); }, []);
 
-  const toggleExpanded = (id) => setExpandedItems(prev => ({ ...prev, [id]: !prev[id] }));
+  const toggleExpanded = useCallback((id) => setExpandedItems(prev => ({ ...prev, [id]: !prev[id] })), []);
 
-  const copyToClipboard = (code) => {
+  const copyToClipboard = useCallback((code) => {
     navigator.clipboard.writeText(code);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
-  };
+  }, []);
 
   // ── CODE CRUD ──────────────────────────────────────────────────────────────
-  const startEditCode = (code) => {
+  const startEditCode = useCallback((code) => {
     setAddingNew(null);
     setEditingId(`code-${code.id}`);
     setFormData({ ...code });
-  };
+  }, []);
 
-  const startAddCode = () => {
+  const startAddCode = useCallback(() => {
     setEditingId(null);
     setAddingNew('code');
     setFormData({ code: '', reward: '', location: 'In-Game' });
-  };
+  }, []);
 
-  const saveCode = async () => {
+  const saveCode = useCallback(async () => {
     setSaving(true);
     try {
       if (editingId?.startsWith('code-')) {
@@ -187,30 +195,30 @@ export default function SwordXStaffCommunity() {
       cancelEdit();
     } catch (err) { alert('Save failed: ' + err.message); }
     setSaving(false);
-  };
+  }, [editingId, formData, codes, cancelEdit, logAction]);
 
-  const deleteCode = async (id) => {
+  const deleteCode = useCallback(async (id) => {
     const item = codes.find(c => c.id === id);
     if (!confirm(`Delete code "${item?.code}"?`)) return;
     await api(`/api/codes/${id}`, { method: 'DELETE' });
     setCodes(codes.filter(c => c.id !== id));
     logAction('DELETE', 'CODE', item?.code, `Deleted code: ${item?.code}`);
-  };
+  }, [codes, logAction]);
 
   // ── CLASS CRUD ─────────────────────────────────────────────────────────────
-  const startEditClass = (cls) => {
+  const startEditClass = useCallback((cls) => {
     setAddingNew(null);
     setEditingId(`class-${cls.id}`);
     setFormData({ ...cls });
-  };
+  }, []);
 
-  const startAddClass = () => {
+  const startAddClass = useCallback(() => {
     setEditingId(null);
     setAddingNew('class');
     setFormData({ name: '', role: '', description: '', details: '', image: '' });
-  };
+  }, []);
 
-  const saveClass = async () => {
+  const saveClass = useCallback(async () => {
     setSaving(true);
     try {
       if (editingId?.startsWith('class-')) {
@@ -226,30 +234,30 @@ export default function SwordXStaffCommunity() {
       cancelEdit();
     } catch (err) { alert('Save failed: ' + err.message); }
     setSaving(false);
-  };
+  }, [editingId, formData, classes, cancelEdit, logAction]);
 
-  const deleteClass = async (id) => {
+  const deleteClass = useCallback(async (id) => {
     const item = classes.find(c => c.id === id);
     if (!confirm(`Delete class "${item?.name}"?`)) return;
     await api(`/api/classes/${id}`, { method: 'DELETE' });
     setClasses(classes.filter(c => c.id !== id));
     logAction('DELETE', 'CLASS', item?.name, `Deleted class: ${item?.name}`);
-  };
+  }, [classes, logAction]);
 
   // ── EVENT CRUD ─────────────────────────────────────────────────────────────
-  const startEditEvent = (event) => {
+  const startEditEvent = useCallback((event) => {
     setAddingNew(null);
     setEditingId(`event-${event.id}`);
     setFormData({ ...event });
-  };
+  }, []);
 
-  const startAddEvent = () => {
+  const startAddEvent = useCallback(() => {
     setEditingId(null);
     setAddingNew('event');
     setFormData({ title: '', description: '', details: '', image: '', status: 'UPCOMING' });
-  };
+  }, []);
 
-  const saveEvent = async () => {
+  const saveEvent = useCallback(async () => {
     setSaving(true);
     try {
       if (editingId?.startsWith('event-')) {
@@ -265,30 +273,30 @@ export default function SwordXStaffCommunity() {
       cancelEdit();
     } catch (err) { alert('Save failed: ' + err.message); }
     setSaving(false);
-  };
+  }, [editingId, formData, events, cancelEdit, logAction]);
 
-  const deleteEvent = async (id) => {
+  const deleteEvent = useCallback(async (id) => {
     const item = events.find(e => e.id === id);
     if (!confirm(`Delete event "${item?.title}"?`)) return;
     await api(`/api/events/${id}`, { method: 'DELETE' });
     setEvents(events.filter(e => e.id !== id));
     logAction('DELETE', 'EVENT', item?.title, `Deleted event: ${item?.title}`);
-  };
+  }, [events, logAction]);
 
   // ── GUIDE CRUD ─────────────────────────────────────────────────────────────
-  const startEditGuide = (guide) => {
+  const startEditGuide = useCallback((guide) => {
     setAddingNew(null);
     setEditingId(`guide-${guide.id}`);
     setFormData({ ...guide });
-  };
+  }, []);
 
-  const startAddGuide = () => {
+  const startAddGuide = useCallback(() => {
     setEditingId(null);
     setAddingNew('guide');
     setFormData({ title: '', content: '' });
-  };
+  }, []);
 
-  const saveGuide = async () => {
+  const saveGuide = useCallback(async () => {
     setSaving(true);
     try {
       if (editingId?.startsWith('guide-')) {
@@ -304,20 +312,74 @@ export default function SwordXStaffCommunity() {
       cancelEdit();
     } catch (err) { alert('Save failed: ' + err.message); }
     setSaving(false);
-  };
+  }, [editingId, formData, guides, cancelEdit, logAction]);
 
-  const deleteGuide = async (id) => {
+  const deleteGuide = useCallback(async (id) => {
     const item = guides.find(g => g.id === id);
     if (!confirm(`Delete guide "${item?.title}"?`)) return;
     await api(`/api/guides/${id}`, { method: 'DELETE' });
     setGuides(guides.filter(g => g.id !== id));
     logAction('DELETE', 'GUIDE', item?.title, `Deleted guide: ${item?.title}`);
-  };
+  }, [guides, logAction]);
+
+  // ── SECTION CRUD ──────────────────────────────────────────────────────────
+  const addSection = useCallback(() => {
+    setAddingNewSection(true);
+    setSectionFormData({ name: '', visible: true });
+  }, []);
+
+  const saveSection = useCallback(() => {
+    if (!sectionFormData.name.trim()) {
+      alert('Section name cannot be empty');
+      return;
+    }
+
+    if (editingSectionId) {
+      setSections(sections.map(s =>
+        s.id === editingSectionId
+          ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
+          : s
+      ));
+      logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
+    } else {
+      const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
+      const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
+      setSections([...sections, newSection]);
+      logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
+    }
+
+    cancelSectionEdit();
+  }, [editingSectionId, sectionFormData, sections, logAction]);
+
+  const cancelSectionEdit = useCallback(() => {
+    setEditingSectionId(null);
+    setAddingNewSection(false);
+    setSectionFormData({});
+  }, []);
+
+  const editSection = useCallback((section) => {
+    setEditingSectionId(section.id);
+    setAddingNewSection(false);
+    setSectionFormData({ ...section });
+  }, []);
+
+  const deleteSection = useCallback((id) => {
+    const section = sections.find(s => s.id === id);
+    if (!confirm(`Delete section "${section?.name}"?`)) return;
+    setSections(sections.filter(s => s.id !== id));
+    logAction('DELETE', 'SECTION', section?.name, `Deleted section: ${section?.name}`);
+  }, [sections, logAction]);
+
+  const toggleSectionVisibility = useCallback((id) => {
+    setSections(sections.map(s =>
+      s.id === id ? { ...s, visible: !s.visible } : s
+    ));
+  }, [sections]);
 
   // ── Shared form styles ─────────────────────────────────────────────────────
   const inputCls = 'px-4 py-2 bg-slate-700 border border-amber-600/30 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-full';
 
-  const EditForm = ({ title, children, onSave }) => (
+  const EditForm = useCallback(({ title, children, onSave }) => (
     <div ref={editFormRef} className="bg-slate-800/50 border border-amber-600/30 rounded-xl p-6 mb-6 scroll-mt-24">
       <h3 className="font-bold text-lg mb-4 text-amber-300">{title}</h3>
       <div className="grid grid-cols-2 gap-4 mb-4">{children}</div>
@@ -335,7 +397,9 @@ export default function SwordXStaffCommunity() {
         </button>
       </div>
     </div>
-  );
+  ), [saving, cancelEdit]);
+
+  const visibleSections = useMemo(() => sections.filter(s => s.visible), [sections]);
 
   if (loading) {
     return (
@@ -456,7 +520,7 @@ export default function SwordXStaffCommunity() {
       <nav className="sticky top-0 z-40 border-b border-amber-900/20 backdrop-blur-sm bg-slate-950/50">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex gap-2 overflow-x-auto">
-            {sections.filter(s => s.visible).map(section => (
+            {visibleSections.map(section => (
               <button
                 key={section.id}
                 onClick={() => { setActiveTab(section.id); cancelEdit(); }}
@@ -494,11 +558,11 @@ export default function SwordXStaffCommunity() {
 
             {isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (
               <EditForm title={editingId ? 'Edit Class' : 'Add New Class'} onSave={saveClass}>
-                <input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} />
-                <input className={inputCls} placeholder="Role" value={formData.role || ''} onChange={e => setFormData({ ...formData, role: e.target.value })} />
-                <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => setFormData({ ...formData, image: e.target.value })} />
-                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
-                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => setFormData({ ...formData, details: e.target.value })} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => handleFormDataChange('name', e.target.value)} />
+                <input className={inputCls} placeholder="Role" value={formData.role || ''} onChange={e => handleFormDataChange('role', e.target.value)} />
+                <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
               </EditForm>
             )}
 
@@ -561,15 +625,15 @@ export default function SwordXStaffCommunity() {
 
             {isAdmin && (addingNew === 'event' || editingId?.startsWith('event-')) && (
               <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
-                <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => setFormData({ ...formData, title: e.target.value })} />
-                <input className={`col-span-2 ${inputCls}`} placeholder="Image URL" value={formData.image || ''} onChange={e => setFormData({ ...formData, image: e.target.value })} />
-                <select className={`col-span-2 ${inputCls}`} value={formData.status || 'UPCOMING'} onChange={e => setFormData({ ...formData, status: e.target.value })}>
+                <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <select className={`col-span-2 ${inputCls}`} value={formData.status || 'UPCOMING'} onChange={e => handleFormDataChange('status', e.target.value)}>
                   <option>LIVE</option>
                   <option>UPCOMING</option>
                   <option>ENDING SOON</option>
                 </select>
-                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
-                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => setFormData({ ...formData, details: e.target.value })} />
+                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
               </EditForm>
             )}
 
@@ -632,9 +696,9 @@ export default function SwordXStaffCommunity() {
 
             {isAdmin && (addingNew === 'code' || editingId?.startsWith('code-')) && (
               <EditForm title={editingId ? 'Edit Code' : 'Add New Code'} onSave={saveCode}>
-                <input className={`col-span-2 ${inputCls} font-mono`} placeholder="Code (e.g., SXSPARTNER)" value={formData.code || ''} onChange={e => setFormData({ ...formData, code: e.target.value.toUpperCase() })} />
-                <input className={`col-span-2 ${inputCls}`} placeholder="Reward description" value={formData.reward || ''} onChange={e => setFormData({ ...formData, reward: e.target.value })} />
-                <input className={`col-span-2 ${inputCls}`} placeholder="Location (e.g., In-Game)" value={formData.location || ''} onChange={e => setFormData({ ...formData, location: e.target.value })} />
+                <input className={`col-span-2 ${inputCls} font-mono`} placeholder="Code (e.g., SXSPARTNER)" value={formData.code || ''} onChange={e => handleFormDataChange('code', e.target.value.toUpperCase())} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Reward description" value={formData.reward || ''} onChange={e => handleFormDataChange('reward', e.target.value)} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Location (e.g., In-Game)" value={formData.location || ''} onChange={e => handleFormDataChange('location', e.target.value)} />
               </EditForm>
             )}
 
@@ -697,8 +761,8 @@ export default function SwordXStaffCommunity() {
 
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
-                <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => setFormData({ ...formData, title: e.target.value })} />
-                <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => setFormData({ ...formData, content: e.target.value })} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
               </EditForm>
             )}
 
@@ -733,6 +797,8 @@ export default function SwordXStaffCommunity() {
         {activeTab === 'settings' && isAdmin && (
           <div className="space-y-6">
             <h2 className="text-3xl font-black bg-gradient-to-r from-purple-300 to-pink-500 bg-clip-text text-transparent">Admin Settings</h2>
+
+            {/* Stats */}
             <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
               <h3 className="font-bold text-lg text-slate-300 mb-4">Stats</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -747,6 +813,92 @@ export default function SwordXStaffCommunity() {
                     <p className="text-2xl font-bold text-amber-300">{count}</p>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* Manage Sections */}
+            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-lg text-slate-300">Manage Sections</h3>
+                {!addingNewSection && !editingSectionId && (
+                  <button onClick={addSection} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all">
+                    <Plus size={18} /> Add Section
+                  </button>
+                )}
+              </div>
+
+              {/* Add/Edit Section Form */}
+              {(addingNewSection || editingSectionId) && (
+                <div className="bg-slate-800/50 border border-green-600/30 rounded-lg p-4 mb-6">
+                  <h4 className="font-bold text-green-300 mb-4">{editingSectionId ? 'Edit Section' : 'Add New Section'}</h4>
+                  <div className="space-y-4">
+                    <input
+                      className={inputCls}
+                      placeholder="Section Name (e.g., Shop, Events, Patch Notes)"
+                      value={sectionFormData.name || ''}
+                      onChange={e => handleSectionFormChange('name', e.target.value)}
+                    />
+                    <div className="flex items-center gap-3 bg-slate-700/30 p-3 rounded-lg">
+                      <input
+                        type="checkbox"
+                        checked={sectionFormData.visible !== false}
+                        onChange={e => handleSectionFormChange('visible', e.target.checked)}
+                        className="w-4 h-4"
+                      />
+                      <label className="text-slate-300 text-sm">Visible in Navigation</label>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveSection}
+                        className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold flex items-center justify-center gap-2"
+                      >
+                        <Save size={16} /> Save
+                      </button>
+                      <button
+                        onClick={cancelSectionEdit}
+                        className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Sections List */}
+              <div className="space-y-2">
+                {sections.length === 0 ? (
+                  <p className="text-slate-400 text-sm">No sections. Add one to get started!</p>
+                ) : (
+                  sections.map(section => (
+                    <div key={section.id} className="bg-slate-700/30 rounded-lg p-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3 flex-1">
+                        <button
+                          onClick={() => toggleSectionVisibility(section.id)}
+                          className={`px-3 py-1 rounded text-xs font-bold ${section.visible ? 'bg-green-600/40 text-green-300' : 'bg-slate-600/40 text-slate-400'}`}
+                        >
+                          {section.visible ? '👁️ Visible' : '👁️‍🗨️ Hidden'}
+                        </button>
+                        <span className="text-white font-semibold">{section.name}</span>
+                        <code className="text-slate-400 text-xs bg-slate-900/50 px-2 py-1 rounded">{section.id}</code>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => editSection(section)}
+                          className="px-3 py-1 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"
+                        >
+                          <Edit3 size={14} /> Edit
+                        </button>
+                        <button
+                          onClick={() => deleteSection(section.id)}
+                          className="px-3 py-1 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"
+                        >
+                          <Trash2 size={14} /> Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
