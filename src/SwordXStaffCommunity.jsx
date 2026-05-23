@@ -36,11 +36,12 @@ export default function SwordXStaffCommunity() {
   const [classes, setClasses] = useState([]);
   const [events, setEvents] = useState([]);
   const [guides, setGuides] = useState([]);
+  const [customSectionItems, setCustomSectionItems] = useState({});
   const [sections, setSections] = useState([
-    { id: 'classes', name: 'Classes', visible: true, notes: '' },
-    { id: 'events', name: 'Events', visible: true, notes: '' },
-    { id: 'codes', name: 'Codes', visible: true, notes: 'Note: How to Redeem codes in-game go to Home → Main Menu → User Center → Gift Code' },
-    { id: 'guide', name: 'Guide', visible: true, notes: '' },
+    { id: 'classes', name: 'Classes', visible: true },
+    { id: 'events', name: 'Events', visible: true },
+    { id: 'codes', name: 'Codes', visible: true },
+    { id: 'guide', name: 'Guide', visible: true },
   ]);
 
   // ── Admin State ────────────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ export default function SwordXStaffCommunity() {
     load();
   }, []);
 
-  // ── Restore admin session and sections on mount ONLY ────────────────────────
+  // ── Restore admin session on mount ONLY ────────────────────────────────────
   useEffect(() => {
     const savedAdmin = localStorage.getItem('isAdmin') === 'true';
     if (savedAdmin) {
@@ -95,20 +96,16 @@ export default function SwordXStaffCommunity() {
       }
     }
 
-    const savedSections = localStorage.getItem('sections');
-    if (savedSections) {
+    // Restore custom section items from localStorage
+    const savedCustomItems = localStorage.getItem('customSectionItems');
+    if (savedCustomItems) {
       try {
-        setSections(JSON.parse(savedSections));
+        setCustomSectionItems(JSON.parse(savedCustomItems));
       } catch (e) {
-        console.error('Failed to restore sections:', e);
+        console.error('Failed to restore custom items:', e);
       }
     }
   }, []);
-
-  // ── Save sections to localStorage whenever they change ──────────────────────
-  useEffect(() => {
-    localStorage.setItem('sections', JSON.stringify(sections));
-  }, [sections]);
 
   // ── Scroll edit form into view whenever it opens ───────────────────────────
   useEffect(() => {
@@ -336,6 +333,56 @@ export default function SwordXStaffCommunity() {
     logAction('DELETE', 'GUIDE', item?.title, `Deleted guide: ${item?.title}`);
   }, [guides, logAction]);
 
+  // ── CUSTOM SECTION ITEM CRUD ──────────────────────────────────────────────
+  const startAddCustomItem = useCallback((sectionId) => {
+    setEditingId(null);
+    setAddingNew(`custom-${sectionId}`);
+    setFormData({ title: '', content: '' });
+  }, []);
+
+  const startEditCustomItem = useCallback((sectionId, itemId) => {
+    const items = customSectionItems[sectionId] || [];
+    const item = items.find(i => i.id === itemId);
+    if (!item) return;
+    setAddingNew(null);
+    setEditingId(`custom-item-${sectionId}-${itemId}`);
+    setFormData({ ...item });
+  }, [customSectionItems]);
+
+  const saveCustomItem = useCallback(() => {
+    const match = editingId?.match(/custom-item-(.+)-(\d+)/) || addingNew?.match(/custom-(.+)/) && [null, addingNew.replace('custom-', '')];
+    
+    if (editingId?.startsWith('custom-item-')) {
+      const [, sectionId, itemId] = editingId.match(/custom-item-(.+)-(\d+)/);
+      const items = customSectionItems[sectionId] || [];
+      const updated = items.map(i => i.id === parseInt(itemId) ? { ...formData, id: i.id } : i);
+      const newItems = { ...customSectionItems, [sectionId]: updated };
+      setCustomSectionItems(newItems);
+      localStorage.setItem('customSectionItems', JSON.stringify(newItems));
+      logAction('EDIT', 'CUSTOM_ITEM', formData.title, `Updated item in ${sectionId}`);
+    } else if (addingNew?.startsWith('custom-')) {
+      const sectionId = addingNew.replace('custom-', '');
+      const items = customSectionItems[sectionId] || [];
+      const newId = Math.max(...items.map(i => i.id || 0), 0) + 1;
+      const newItems = { ...customSectionItems, [sectionId]: [...items, { ...formData, id: newId }] };
+      setCustomSectionItems(newItems);
+      localStorage.setItem('customSectionItems', JSON.stringify(newItems));
+      logAction('ADD', 'CUSTOM_ITEM', formData.title, `Added item to ${sectionId}`);
+    }
+    cancelEdit();
+  }, [editingId, addingNew, formData, customSectionItems, cancelEdit, logAction]);
+
+  const deleteCustomItem = useCallback((sectionId, itemId) => {
+    const items = customSectionItems[sectionId] || [];
+    const item = items.find(i => i.id === itemId);
+    if (!confirm(`Delete item "${item?.title}"?`)) return;
+    const updated = items.filter(i => i.id !== itemId);
+    const newItems = updated.length === 0 ? { ...customSectionItems, [sectionId]: undefined } : { ...customSectionItems, [sectionId]: updated };
+    setCustomSectionItems(newItems);
+    localStorage.setItem('customSectionItems', JSON.stringify(newItems));
+    logAction('DELETE', 'CUSTOM_ITEM', item?.title, `Deleted item from ${sectionId}`);
+  }, [customSectionItems, logAction]);
+
   // ── SECTION CRUD ──────────────────────────────────────────────────────────
   const addSection = useCallback(() => {
     setAddingNewSection(true);
@@ -349,26 +396,21 @@ export default function SwordXStaffCommunity() {
     }
 
     if (editingSectionId) {
-      setSections(prevSections => {
-        const updated = prevSections.map(s =>
-          s.id === editingSectionId
-            ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible, notes: sectionFormData.notes || '' }
-            : s
-        );
-        logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
-        return updated;
-      });
+      setSections(sections.map(s =>
+        s.id === editingSectionId
+          ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
+          : s
+      ));
+      logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
     } else {
       const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
-      const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible, notes: sectionFormData.notes || '' };
-      setSections(prevSections => {
-        logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
-        return [...prevSections, newSection];
-      });
+      const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
+      setSections([...sections, newSection]);
+      logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
     }
 
     cancelSectionEdit();
-  }, [editingSectionId, sectionFormData, logAction]);
+  }, [editingSectionId, sectionFormData, sections, logAction]);
 
   const cancelSectionEdit = useCallback(() => {
     setEditingSectionId(null);
@@ -384,20 +426,16 @@ export default function SwordXStaffCommunity() {
 
   const deleteSection = useCallback((id) => {
     const section = sections.find(s => s.id === id);
-    if (!section) return;
-    if (!confirm(`Delete section "${section.name}"?`)) return;
-    
-    setSections(prevSections => prevSections.filter(s => s.id !== id));
-    logAction('DELETE', 'SECTION', section.name, `Deleted section: ${section.name}`);
+    if (!confirm(`Delete section "${section?.name}"?`)) return;
+    setSections(sections.filter(s => s.id !== id));
+    logAction('DELETE', 'SECTION', section?.name, `Deleted section: ${section?.name}`);
   }, [sections, logAction]);
 
   const toggleSectionVisibility = useCallback((id) => {
-    setSections(prevSections =>
-      prevSections.map(s =>
-        s.id === id ? { ...s, visible: !s.visible } : s
-      )
-    );
-  }, []);
+    setSections(sections.map(s =>
+      s.id === id ? { ...s, visible: !s.visible } : s
+    ));
+  }, [sections]);
 
   // ── Shared form styles ─────────────────────────────────────────────────────
   const inputCls = 'px-4 py-2 bg-slate-700 border border-amber-600/30 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-full';
@@ -579,12 +617,6 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
-            {sections.find(s => s.id === 'classes')?.notes && (
-              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'classes')?.notes}</p>
-              </div>
-            )}
-
             {isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (
               <EditForm title={editingId ? 'Edit Class' : 'Add New Class'} onSave={saveClass}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => handleFormDataChange('name', e.target.value)} />
@@ -651,12 +683,6 @@ export default function SwordXStaffCommunity() {
                 </button>
               )}
             </div>
-
-            {sections.find(s => s.id === 'events')?.notes && (
-              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'events')?.notes}</p>
-              </div>
-            )}
 
             {isAdmin && (addingNew === 'event' || editingId?.startsWith('event-')) && (
               <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
@@ -729,11 +755,20 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
-            {sections.find(s => s.id === 'codes')?.notes && (
-              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'codes')?.notes}</p>
-              </div>
+            {isAdmin && (addingNew === 'code' || editingId?.startsWith('code-')) && (
+              <EditForm title={editingId ? 'Edit Code' : 'Add New Code'} onSave={saveCode}>
+                <input className={`col-span-2 ${inputCls} font-mono`} placeholder="Code (e.g., SXSPARTNER)" value={formData.code || ''} onChange={e => handleFormDataChange('code', e.target.value.toUpperCase())} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Reward description" value={formData.reward || ''} onChange={e => handleFormDataChange('reward', e.target.value)} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Location (e.g., In-Game)" value={formData.location || ''} onChange={e => handleFormDataChange('location', e.target.value)} />
+              </EditForm>
             )}
+
+            <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+              <p className="text-blue-200 text-sm flex items-start gap-2">
+                <span className="flex-shrink-0 mt-0.5">ℹ️</span>
+                <span>Redeem codes in-game at: <strong>Home → Main Menu → User Center → Gift Code</strong></span>
+              </p>
+            </div>
 
             <div className="grid gap-4">
               {codes.map((code) => (
@@ -785,12 +820,6 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
-            {sections.find(s => s.id === 'guide')?.notes && (
-              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-                <p className="text-blue-200 text-sm">{sections.find(s => s.id === 'guide')?.notes}</p>
-              </div>
-            )}
-
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
@@ -826,17 +855,50 @@ export default function SwordXStaffCommunity() {
         )}
 
         {/* ── CUSTOM SECTIONS ── */}
-        {activeTab !== 'classes' && activeTab !== 'events' && activeTab !== 'codes' && activeTab !== 'guide' && activeTab !== 'settings' && (
+        {!['classes', 'events', 'codes', 'guide', 'settings'].includes(activeTab) && (
           <div className="space-y-6">
-            <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent capitalize">{sections.find(s => s.id === activeTab)?.name}</h2>
-            {sections.find(s => s.id === activeTab)?.notes && (
-              <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5">
-                <p className="text-blue-200 text-sm">{sections.find(s => s.id === activeTab)?.notes}</p>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent">
+                {sections.find(s => s.id === activeTab)?.name || 'Section'}
+              </h2>
+              {isAdmin && (
+                <button onClick={() => startAddCustomItem(activeTab)} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all">
+                  <Plus size={18} /> Add
+                </button>
+              )}
+            </div>
+
+            {isAdmin && (addingNew?.startsWith('custom-') || editingId?.startsWith('custom-item-')) && (
+              <EditForm title={editingId ? 'Edit Item' : 'Add New Item'} onSave={saveCustomItem}>
+                <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
+              </EditForm>
+            )}
+
+            {(!customSectionItems[activeTab] || customSectionItems[activeTab].length === 0) ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400 text-lg">No items yet.{isAdmin && ' Click "Add" to get started!'}</p>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-6">
+                {customSectionItems[activeTab].map((item) => (
+                  <div key={item.id} className="bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl p-6 hover:border-amber-600/50 transition-all">
+                    <h3 className="font-bold text-lg text-amber-300 mb-3">{item.title}</h3>
+                    <p className="text-slate-300 text-sm leading-relaxed mb-4">{item.content}</p>
+                    {isAdmin && (
+                      <div className="flex gap-2">
+                        <button onClick={() => startEditCustomItem(activeTab, item.id)} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1">
+                          <Edit3 size={14} /> Edit
+                        </button>
+                        <button onClick={() => deleteCustomItem(activeTab, item.id)} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1">
+                          <Trash2 size={14} /> Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
-            <div className="text-center py-12">
-              <p className="text-slate-400 text-lg">This is a custom section.</p>
-            </div>
           </div>
         )}
 
@@ -884,12 +946,6 @@ export default function SwordXStaffCommunity() {
                       placeholder="Section Name (e.g., Shop, Events, Patch Notes)"
                       value={sectionFormData.name || ''}
                       onChange={e => handleSectionFormChange('name', e.target.value)}
-                    />
-                    <textarea
-                      className={`${inputCls} h-24`}
-                      placeholder="Section Note (Optional) - e.g., 'Note: How to Redeem codes in-game go to Home → Main Menu → User Center → Gift Code'"
-                      value={sectionFormData.notes || ''}
-                      onChange={e => handleSectionFormChange('notes', e.target.value)}
                     />
                     <div className="flex items-center gap-3 bg-slate-700/30 p-3 rounded-lg">
                       <input
