@@ -78,6 +78,16 @@ export default function SwordXStaffCommunity() {
       }
     }
     load();
+
+    // Load sections from localStorage (CRITICAL: must persist custom sections)
+    const savedSections = localStorage.getItem('sections');
+    if (savedSections) {
+      try {
+        setSections(JSON.parse(savedSections));
+      } catch (e) {
+        console.error('Failed to restore sections:', e);
+      }
+    }
   }, []);
 
   // ── Restore admin session on mount ONLY ────────────────────────────────────
@@ -106,6 +116,11 @@ export default function SwordXStaffCommunity() {
       }
     }
   }, []);
+
+  // ── SAVE SECTIONS TO LOCALSTORAGE WHENEVER THEY CHANGE ──────────────────────
+  useEffect(() => {
+    localStorage.setItem('sections', JSON.stringify(sections));
+  }, [sections]);
 
   // ── Scroll edit form into view whenever it opens ───────────────────────────
   useEffect(() => {
@@ -436,6 +451,18 @@ export default function SwordXStaffCommunity() {
       s.id === id ? { ...s, visible: !s.visible } : s
     ));
   }, [sections]);
+
+  // ── IMAGE FILE UPLOAD HANDLER ─────────────────────────────────────────────
+  const handleImageUpload = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result;
+      handleFormDataChange('image', base64);
+    };
+    reader.readAsDataURL(file);
+  }, []);
 
   // ── Shared form styles ─────────────────────────────────────────────────────
   const inputCls = 'px-4 py-2 bg-slate-700 border border-amber-600/30 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-full';
@@ -871,7 +898,17 @@ export default function SwordXStaffCommunity() {
             {isAdmin && (addingNew?.startsWith('custom-') || editingId?.startsWith('custom-item-')) && (
               <EditForm title={editingId ? 'Edit Item' : 'Add New Item'} onSave={saveCustomItem}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
-                <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
+                <input className={inputCls} placeholder="Role/Type (optional)" value={formData.role || ''} onChange={e => handleFormDataChange('role', e.target.value)} />
+                <input className={inputCls} placeholder="Image URL (optional)" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    📁 Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                </div>
+                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details/Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
               </EditForm>
             )}
 
@@ -880,21 +917,30 @@ export default function SwordXStaffCommunity() {
                 <p className="text-slate-400 text-lg">No items yet.{isAdmin && ' Click "Add" to get started!'}</p>
               </div>
             ) : (
-              <div className="grid md:grid-cols-2 gap-6">
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {customSectionItems[activeTab].map((item) => (
-                  <div key={item.id} className="bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl p-6 hover:border-amber-600/50 transition-all">
-                    <h3 className="font-bold text-lg text-amber-300 mb-3">{item.title}</h3>
-                    <p className="text-slate-300 text-sm leading-relaxed mb-4">{item.content}</p>
-                    {isAdmin && (
-                      <div className="flex gap-2">
-                        <button onClick={() => startEditCustomItem(activeTab, item.id)} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1">
-                          <Edit3 size={14} /> Edit
-                        </button>
-                        <button onClick={() => deleteCustomItem(activeTab, item.id)} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1">
-                          <Trash2 size={14} /> Delete
-                        </button>
+                  <div key={item.id} className="cursor-pointer bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    {item.image && (
+                      <div className="relative h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                        <img src={item.image} alt={item.title} className="w-full h-full object-cover" />
+                        {item.role && <div className="absolute top-3 right-3 px-3 py-1 bg-blue-600/80 rounded-full text-xs font-bold">{item.role}</div>}
                       </div>
                     )}
+                    <div className="p-5">
+                      <h3 className="font-bold text-lg text-amber-300 mb-2">{item.title}</h3>
+                      {item.description && <p className="text-sm text-slate-300 mb-3">{item.description}</p>}
+                      {item.content && <p className="text-sm text-slate-400 leading-relaxed mb-4">{item.content}</p>}
+                      {isAdmin && (
+                        <div className="flex gap-2 mt-4">
+                          <button onClick={() => startEditCustomItem(activeTab, item.id)} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1">
+                            <Edit3 size={14} /> Edit
+                          </button>
+                          <button onClick={() => deleteCustomItem(activeTab, item.id)} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1">
+                            <Trash2 size={14} /> Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
