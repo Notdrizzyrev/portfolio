@@ -487,6 +487,13 @@ export default function SwordXStaffCommunity() {
     </div>
   ), [saving, cancelEdit]);
 
+  // ── SECTIONS VISIBILITY LOGIC ────────────────────────────────────────────
+  const displaySections = useMemo(() => {
+    // Admins see ALL sections (including hidden) for editing
+    // Non-admins only see visible sections
+    return isAdmin ? sections : sections.filter(s => s.visible);
+  }, [sections, isAdmin]);
+
   const visibleSections = useMemo(() => sections.filter(s => s.visible), [sections]);
 
   if (loading) {
@@ -608,13 +615,14 @@ export default function SwordXStaffCommunity() {
       <nav className="sticky top-0 z-40 border-b border-amber-900/20 backdrop-blur-sm bg-slate-950/50">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex gap-2 overflow-x-auto">
-            {visibleSections.map(section => (
+            {displaySections.map(section => (
               <button
                 key={section.id}
                 onClick={() => { setActiveTab(section.id); cancelEdit(); }}
-                className={`px-6 py-3 font-semibold text-sm whitespace-nowrap border-b-2 transition-all ${activeTab === section.id ? 'text-amber-300 border-amber-400' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
+                className={`px-6 py-3 font-semibold text-sm whitespace-nowrap border-b-2 transition-all flex items-center gap-2 ${activeTab === section.id ? 'text-amber-300 border-amber-400' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
               >
                 {section.name}
+                {isAdmin && !section.visible && <span className="px-2 py-0.5 bg-red-600/40 text-red-300 text-xs rounded border border-red-600/50">hidden</span>}
               </button>
             ))}
             {isAdmin && (
