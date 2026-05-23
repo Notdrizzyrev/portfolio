@@ -119,13 +119,15 @@ export default function SwordXStaffCommunity() {
     async function load() {
       try {
         setLoading(true);
-        const [c, cl, ev, g, ann, notes] = await Promise.all([
+        const [c, cl, ev, g, ann, notes, logs, custom] = await Promise.all([
           api('/api/codes'),
           api('/api/classes'),
           api('/api/events'),
           api('/api/guides'),
           api('/api/announcements').catch(() => ({ text: '', color: 'amber' })), // fallback if endpoint doesn't exist
           api('/api/section-notes').catch(() => ({})), // fallback if endpoint doesn't exist
+          api('/api/logs').catch(() => []), // fallback if endpoint doesn't exist
+          api('/api/custom-items').catch(() => ({})), // fallback if endpoint doesn't exist
         ]);
         setCodes(c);
         setClasses(cl);
@@ -139,6 +141,14 @@ export default function SwordXStaffCommunity() {
         console.log('Note: Loaded section notes from API:', notes);
         if (notes && Object.keys(notes).length > 0) {
           setSectionNotes(notes);
+        }
+        console.log('Note: Loaded admin logs from API:', logs);
+        if (logs && logs.length > 0) {
+          setAdminLogs(logs);
+        }
+        console.log('Note: Loaded custom items from API:', custom);
+        if (custom && Object.keys(custom).length > 0) {
+          setCustomSectionItems(custom);
         }
       } catch (err) {
         console.error('Note: Failed to load data:', err);
@@ -164,15 +174,6 @@ export default function SwordXStaffCommunity() {
     const savedAdmin = localStorage.getItem('isAdmin') === 'true';
     if (savedAdmin) {
       setIsAdmin(true);
-    }
-
-    const savedLogs = localStorage.getItem('adminLogs');
-    if (savedLogs) {
-      try {
-        setAdminLogs(JSON.parse(savedLogs));
-      } catch (e) {
-        console.error('Failed to restore logs:', e);
-      }
     }
 
     // Restore custom section items from localStorage
@@ -202,6 +203,41 @@ export default function SwordXStaffCommunity() {
     }
   }, [editingId, addingNew]);
 
+  // ── AUTO-RELOAD PAGE WHEN DATA CHANGES ─────────────────────────────────────
+  useEffect(() => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const [c, cl, ev, g, ann, notes, custom] = await Promise.all([
+          api('/api/codes'),
+          api('/api/classes'),
+          api('/api/events'),
+          api('/api/guides'),
+          api('/api/announcements').catch(() => ({ text: '', color: 'amber' })),
+          api('/api/section-notes').catch(() => ({})),
+          api('/api/custom-items').catch(() => ({})),
+        ]);
+
+        // Check if any data changed
+        const codesChanged = JSON.stringify(c) !== JSON.stringify(codes);
+        const classesChanged = JSON.stringify(cl) !== JSON.stringify(classes);
+        const eventsChanged = JSON.stringify(ev) !== JSON.stringify(events);
+        const guidesChanged = JSON.stringify(g) !== JSON.stringify(guides);
+        const annChanged = ann?.text !== announcement;
+        const notesChanged = JSON.stringify(notes) !== JSON.stringify(sectionNotes);
+        const customChanged = JSON.stringify(custom) !== JSON.stringify(customSectionItems);
+
+        if (codesChanged || classesChanged || eventsChanged || guidesChanged || annChanged || notesChanged || customChanged) {
+          console.log('Note: Data changed, reloading page for everyone');
+          window.location.reload();
+        }
+      } catch (err) {
+        // Silently fail on poll errors
+      }
+    }, 10000); // Poll every 10 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [codes, classes, events, guides, announcement, sectionNotes, customSectionItems]);
+
   // ── Memoized callback for form data updates ────────────────────────────────
   const handleFormDataChange = useCallback((key, value) => {
     setFormData(prev => ({ ...prev, [key]: value }));
@@ -215,13 +251,31 @@ export default function SwordXStaffCommunity() {
     const timestamp = new Date();
     const newLog = {
       id: adminLogs.length + 1,
-      actionType, category, itemName, details,
-      timestamp: timestamp.toLocaleString(),
-      time: timestamp.toLocaleTimeString()
+      action_type: actionType,
+      category: category,
+      item_name: itemName,
+      details: details,
+      timestamp: timestamp.toISOString()
     };
+    
+    // Save to backend
+    try {
+      api('/api/logs', { 
+        method: 'POST', 
+        body: JSON.stringify({ 
+          actionType, 
+          category, 
+          itemName, 
+          details 
+        })
+      }).catch(err => console.error('Note: Failed to log action:', err));
+    } catch (err) {
+      console.error('Note: Failed to send log:', err);
+    }
+    
+    // Update local state
     const updatedLogs = [newLog, ...adminLogs];
     setAdminLogs(updatedLogs);
-    localStorage.setItem('adminLogs', JSON.stringify(updatedLogs));
   }, [adminLogs.length]);
 
   const handleLogin = useCallback(() => {
@@ -435,38 +489,58 @@ export default function SwordXStaffCommunity() {
     setFormData({ ...item });
   }, [customSectionItems]);
 
-  const saveCustomItem = useCallback(() => {
+  const saveCustomItem = useCallback(async () => {
     const match = editingId?.match(/custom-item-(.+)-(\d+)/) || addingNew?.match(/custom-(.+)/) && [null, addingNew.replace('custom-', '')];
     
     if (editingId?.startsWith('custom-item-')) {
       const [, sectionId, itemId] = editingId.match(/custom-item-(.+)-(\d+)/);
       const items = customSectionItems[sectionId] || [];
-      const updated = items.map(i => i.id === parseInt(itemId) ? { ...formData, id: i.id } : i);
-      const newItems = { ...customSectionItems, [sectionId]: updated };
-      setCustomSectionItems(newItems);
-      localStorage.setItem('customSectionItems', JSON.stringify(newItems));
-      logAction('EDIT', 'CUSTOM_ITEM', formData.title, `Updated item in ${sectionId}`);
+      const updatedItem = { ...formData, id: parseInt(itemId) };
+      try {
+        await api('/api/custom-items', { 
+          method: 'POST', 
+          body: JSON.stringify({ sectionId, item: updatedItem })
+        });
+        const updated = items.map(i => i.id === parseInt(itemId) ? updatedItem : i);
+        const newItems = { ...customSectionItems, [sectionId]: updated };
+        setCustomSectionItems(newItems);
+        logAction('EDIT', 'CUSTOM_ITEM', formData.title, `Updated item in ${sectionId}`);
+      } catch (err) {
+        alert('Save failed: ' + err.message);
+      }
     } else if (addingNew?.startsWith('custom-')) {
       const sectionId = addingNew.replace('custom-', '');
       const items = customSectionItems[sectionId] || [];
       const newId = Math.max(...items.map(i => i.id || 0), 0) + 1;
-      const newItems = { ...customSectionItems, [sectionId]: [...items, { ...formData, id: newId }] };
-      setCustomSectionItems(newItems);
-      localStorage.setItem('customSectionItems', JSON.stringify(newItems));
-      logAction('ADD', 'CUSTOM_ITEM', formData.title, `Added item to ${sectionId}`);
+      const newItem = { ...formData, id: newId };
+      try {
+        await api('/api/custom-items', { 
+          method: 'POST', 
+          body: JSON.stringify({ sectionId, item: newItem })
+        });
+        const newItems = { ...customSectionItems, [sectionId]: [...items, newItem] };
+        setCustomSectionItems(newItems);
+        logAction('ADD', 'CUSTOM_ITEM', formData.title, `Added item to ${sectionId}`);
+      } catch (err) {
+        alert('Save failed: ' + err.message);
+      }
     }
     cancelEdit();
   }, [editingId, addingNew, formData, customSectionItems, cancelEdit, logAction]);
 
-  const deleteCustomItem = useCallback((sectionId, itemId) => {
+  const deleteCustomItem = useCallback(async (sectionId, itemId) => {
     const items = customSectionItems[sectionId] || [];
     const item = items.find(i => i.id === itemId);
     if (!confirm(`Delete item "${item?.title}"?`)) return;
-    const updated = items.filter(i => i.id !== itemId);
-    const newItems = updated.length === 0 ? { ...customSectionItems, [sectionId]: undefined } : { ...customSectionItems, [sectionId]: updated };
-    setCustomSectionItems(newItems);
-    localStorage.setItem('customSectionItems', JSON.stringify(newItems));
-    logAction('DELETE', 'CUSTOM_ITEM', item?.title, `Deleted item from ${sectionId}`);
+    try {
+      await api(`/api/custom-items/${sectionId}/${itemId}`, { method: 'DELETE' });
+      const updated = items.filter(i => i.id !== itemId);
+      const newItems = updated.length === 0 ? { ...customSectionItems, [sectionId]: undefined } : { ...customSectionItems, [sectionId]: updated };
+      setCustomSectionItems(newItems);
+      logAction('DELETE', 'CUSTOM_ITEM', item?.title, `Deleted item from ${sectionId}`);
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    }
   }, [customSectionItems, logAction]);
 
   // ── SECTION CRUD ──────────────────────────────────────────────────────────
