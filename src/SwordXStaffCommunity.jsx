@@ -13,6 +13,53 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+// ─── EXTRACTED SECTION NOTE COMPONENT (FIXES KEYBOARD CLOSING ISSUE) ─────────
+// This is now a separate component to prevent it from being recreated on every render
+const SectionNote = ({ 
+  sectionId, 
+  isAdmin, 
+  editingNoteSection, 
+  setEditingNoteSection, 
+  sectionNotes, 
+  setSectionNotes, 
+  inputCls, 
+  saveCodesNote 
+}) => (
+  <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
+    {editingNoteSection === sectionId && isAdmin ? (
+      <div className="space-y-3">
+        <textarea 
+          className={inputCls} 
+          value={sectionNotes[sectionId] || ''}
+          onChange={(e) => setSectionNotes({ ...sectionNotes, [sectionId]: e.target.value })}
+          rows="3"
+          autoFocus
+        />
+        <div className="flex gap-2">
+          <button onClick={() => saveCodesNote(sectionId)} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold text-sm flex items-center gap-2">
+            <Save size={16} /> Save
+          </button>
+          <button onClick={() => setEditingNoteSection(null)} className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : (
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-blue-200 text-sm flex items-start gap-2 flex-1">
+          <span className="flex-shrink-0 mt-0.5">ℹ️</span>
+          <span>{sectionNotes[sectionId]}</span>
+        </p>
+        {isAdmin && (
+          <button onClick={() => setEditingNoteSection(sectionId)} className="px-3 py-1 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1 flex-shrink-0">
+            <Edit3 size={14} /> Edit
+          </button>
+        )}
+      </div>
+    )}
+  </div>
+);
+
 export default function SwordXStaffCommunity() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
@@ -512,43 +559,6 @@ export default function SwordXStaffCommunity() {
     </div>
   ), [saving, cancelEdit]);
 
-  // ── SECTION NOTE COMPONENT (REUSABLE FOR ALL SECTIONS) ─────────────────────
-  const SectionNote = useCallback(({ sectionId }) => (
-    <div className="bg-blue-950/30 border border-blue-700/30 rounded-xl p-5 mb-6">
-            {/* Using SectionNote component below */}
-      {editingNoteSection === sectionId && isAdmin ? (
-        <div className="space-y-3">
-          <textarea 
-            className={inputCls} 
-            value={sectionNotes[sectionId] || ''}
-            onChange={(e) => setSectionNotes({ ...sectionNotes, [sectionId]: e.target.value })}
-            rows="3"
-          />
-          <div className="flex gap-2">
-            <button onClick={() => saveCodesNote(sectionId)} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold text-sm flex items-center gap-2">
-              <Save size={16} /> Save
-            </button>
-            <button onClick={() => setEditingNoteSection(null)} className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-blue-200 text-sm flex items-start gap-2 flex-1">
-            <span className="flex-shrink-0 mt-0.5">ℹ️</span>
-            <span>{sectionNotes[sectionId]}</span>
-          </p>
-          {isAdmin && (
-            <button onClick={() => setEditingNoteSection(sectionId)} className="px-3 py-1 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1 flex-shrink-0">
-              <Edit3 size={14} /> Edit
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  ), [editingNoteSection, isAdmin, sectionNotes, inputCls, saveCodesNote]);
-
   // ── SECTIONS VISIBILITY LOGIC ────────────────────────────────────────────
   const displaySections = useMemo(() => {
     // Admins see ALL sections (including hidden) for editing
@@ -713,7 +723,16 @@ export default function SwordXStaffCommunity() {
                 </button>
               )}
             </div>
-            <SectionNote sectionId="classes" />
+            <SectionNote 
+              sectionId="classes"
+              isAdmin={isAdmin}
+              editingNoteSection={editingNoteSection}
+              setEditingNoteSection={setEditingNoteSection}
+              sectionNotes={sectionNotes}
+              setSectionNotes={setSectionNotes}
+              inputCls={inputCls}
+              saveCodesNote={saveCodesNote}
+            />
 
 
             {isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (
@@ -790,7 +809,16 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
-            <SectionNote sectionId="events" />
+            <SectionNote 
+              sectionId="events"
+              isAdmin={isAdmin}
+              editingNoteSection={editingNoteSection}
+              setEditingNoteSection={setEditingNoteSection}
+              sectionNotes={sectionNotes}
+              setSectionNotes={setSectionNotes}
+              inputCls={inputCls}
+              saveCodesNote={saveCodesNote}
+            />
 
             {isAdmin && (addingNew === 'event' || editingId?.startsWith('event-')) && (
               <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
@@ -878,7 +906,16 @@ export default function SwordXStaffCommunity() {
               </EditForm>
             )}
 
-            <SectionNote sectionId="codes" />
+            <SectionNote 
+              sectionId="codes"
+              isAdmin={isAdmin}
+              editingNoteSection={editingNoteSection}
+              setEditingNoteSection={setEditingNoteSection}
+              sectionNotes={sectionNotes}
+              setSectionNotes={setSectionNotes}
+              inputCls={inputCls}
+              saveCodesNote={saveCodesNote}
+            />
 
             <div className="grid gap-4">
               {codes.map((code) => (
@@ -930,7 +967,16 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
-            <SectionNote sectionId="guide" />
+            <SectionNote 
+              sectionId="guide"
+              isAdmin={isAdmin}
+              editingNoteSection={editingNoteSection}
+              setEditingNoteSection={setEditingNoteSection}
+              sectionNotes={sectionNotes}
+              setSectionNotes={setSectionNotes}
+              inputCls={inputCls}
+              saveCodesNote={saveCodesNote}
+            />
 
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
@@ -1066,6 +1112,53 @@ export default function SwordXStaffCommunity() {
                   <div key={label} className="bg-slate-700/30 rounded p-4">
                     <p className="text-slate-500 text-sm">Total {label}</p>
                     <p className="text-2xl font-bold text-amber-300">{count}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Edit Section Notes */}
+            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
+              <h3 className="font-bold text-lg text-slate-300 mb-4">📝 Section Notes</h3>
+              <div className="space-y-4">
+                {['classes', 'events', 'codes', 'guide'].map(sectionId => (
+                  <div key={sectionId} className="bg-slate-700/30 rounded-lg p-4 border border-slate-600/30">
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="font-semibold text-slate-300 capitalize">{sectionId}</label>
+                      {editingNoteSection === sectionId ? (
+                        <button 
+                          onClick={() => setEditingNoteSection(null)} 
+                          className="px-2 py-1 text-xs bg-slate-600 hover:bg-slate-500 rounded"
+                        >
+                          Done
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => setEditingNoteSection(sectionId)} 
+                          className="px-2 py-1 text-xs bg-blue-600/40 hover:bg-blue-600/60 rounded flex items-center gap-1"
+                        >
+                          <Edit3 size={12} /> Edit
+                        </button>
+                      )}
+                    </div>
+                    {editingNoteSection === sectionId ? (
+                      <div className="space-y-2">
+                        <textarea 
+                          className={`${inputCls} h-20`}
+                          value={sectionNotes[sectionId] || ''}
+                          onChange={(e) => setSectionNotes({ ...sectionNotes, [sectionId]: e.target.value })}
+                          autoFocus
+                        />
+                        <button 
+                          onClick={() => saveCodesNote(sectionId)}
+                          className="px-3 py-1 text-sm bg-green-600 hover:bg-green-500 rounded font-semibold flex items-center gap-2"
+                        >
+                          <Save size={14} /> Save
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-slate-400 text-sm">{sectionNotes[sectionId]}</p>
+                    )}
                   </div>
                 ))}
               </div>
