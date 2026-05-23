@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Copy, Check, LogOut, Edit3, Save, X, Plus, Trash2, Lock, Eye, EyeOff, ChevronDown, Settings, Loader2 } from 'lucide-react';
 
 // ─── Backend API URL ─────────────────────────────────────────────────────────
-const API_BASE = 'https://animevault-backend-production.up.railway.app';
+const API_BASE = 'https://sword-x-staff-backend-production.up.railway.app';
 
 async function api(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
