@@ -119,26 +119,20 @@ export default function SwordXStaffCommunity() {
     async function load() {
       try {
         setLoading(true);
-        const [c, cl, ev, g, ann, notes] = await Promise.all([
+        const [c, cl, ev, g, ann] = await Promise.all([
           api('/api/codes'),
           api('/api/classes'),
           api('/api/events'),
           api('/api/guides'),
           api('/api/announcements').catch(() => ({ text: '', color: 'amber' })), // fallback if endpoint doesn't exist
-          api('/api/section-notes').catch(() => ({})), // fallback if endpoint doesn't exist
         ]);
         setCodes(c);
         setClasses(cl);
         setEvents(ev);
         setGuides(g);
-        console.log('📢 Loaded announcement from API:', ann);
         if (ann?.text) {
           setAnnouncement(ann.text);
           setAnnouncementColor(ann.color || 'amber');
-        }
-        console.log('📝 Loaded section notes from API:', notes);
-        if (notes && Object.keys(notes).length > 0) {
-          setSectionNotes(notes);
         }
       } catch (err) {
         console.error('Failed to load data:', err);
@@ -544,20 +538,9 @@ export default function SwordXStaffCommunity() {
   }, []);
 
   // ── SAVE CODES NOTE ───────────────────────────────────────────────────────
-  const saveCodesNote = useCallback(async (sectionId) => {
-    const noteText = sectionNotes[sectionId];
-    console.log('💾 Saving section note:', sectionId, noteText);
-    try {
-      // Save to backend
-      await api('/api/section-notes', { 
-        method: 'POST', 
-        body: JSON.stringify({ sectionId, note: noteText })
-      });
-      console.log('✅ Section note saved to backend');
-    } catch (err) {
-      console.error('❌ Failed to save section note:', err.message);
-      alert('⚠️ Save failed: ' + err.message);
-    }
+  const saveCodesNote = useCallback((sectionId) => {
+    const updated = { ...sectionNotes };
+    localStorage.setItem('sectionNotes', JSON.stringify(updated));
     setEditingNoteSection(null);
     logAction('EDIT', 'SECTION_NOTE', sectionId, `Updated ${sectionId} note`);
   }, [sectionNotes, logAction]);
@@ -566,21 +549,17 @@ export default function SwordXStaffCommunity() {
   const saveAnnouncement = useCallback(async () => {
     if (announcementText.trim()) {
       const announcementData = { text: announcementText, color: announcementColor };
-      console.log('💾 Saving announcement:', announcementData);
       try {
         // Try to save to backend
-        const result = await api('/api/announcements', { 
+        await api('/api/announcements', { 
           method: 'POST', 
           body: JSON.stringify(announcementData) 
         });
-        console.log('✅ Backend save successful:', result);
       } catch (err) {
-        console.error('❌ Backend announcement save FAILED:', err.message);
-        alert('⚠️ Backend save failed: ' + err.message);
+        console.warn('Backend announcement save failed, using localStorage:', err);
       }
       // Always save to localStorage as backup
       localStorage.setItem('announcement', JSON.stringify(announcementData));
-      console.log('💾 Saved to localStorage');
       setAnnouncement(announcementText);
       setEditingAnnouncement(false);
       logAction('EDIT', 'ANNOUNCEMENT', announcementText.substring(0, 30), 'Updated announcement');
