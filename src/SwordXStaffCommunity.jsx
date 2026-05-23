@@ -119,16 +119,21 @@ export default function SwordXStaffCommunity() {
     async function load() {
       try {
         setLoading(true);
-        const [c, cl, ev, g] = await Promise.all([
+        const [c, cl, ev, g, ann] = await Promise.all([
           api('/api/codes'),
           api('/api/classes'),
           api('/api/events'),
           api('/api/guides'),
+          api('/api/announcements').catch(() => ({ text: '', color: 'amber' })), // fallback if endpoint doesn't exist
         ]);
         setCodes(c);
         setClasses(cl);
         setEvents(ev);
         setGuides(g);
+        if (ann?.text) {
+          setAnnouncement(ann.text);
+          setAnnouncementColor(ann.color || 'amber');
+        }
       } catch (err) {
         console.error('Failed to load data:', err);
       } finally {
@@ -181,18 +186,6 @@ export default function SwordXStaffCommunity() {
         setSectionNotes(JSON.parse(savedSectionNotes));
       } catch (e) {
         console.error('Failed to restore section notes:', e);
-      }
-    }
-
-    // Restore announcement from localStorage
-    const savedAnnouncement = localStorage.getItem('announcement');
-    if (savedAnnouncement) {
-      try {
-        const parsed = JSON.parse(savedAnnouncement);
-        setAnnouncement(parsed.text);
-        setAnnouncementColor(parsed.color || 'amber');
-      } catch (e) {
-        console.error('Failed to restore announcement:', e);
       }
     }
   }, []);
@@ -553,9 +546,19 @@ export default function SwordXStaffCommunity() {
   }, [sectionNotes, logAction]);
 
   // ── ANNOUNCEMENT MANAGEMENT ────────────────────────────────────────────────
-  const saveAnnouncement = useCallback(() => {
+  const saveAnnouncement = useCallback(async () => {
     if (announcementText.trim()) {
       const announcementData = { text: announcementText, color: announcementColor };
+      try {
+        // Try to save to backend
+        await api('/api/announcements', { 
+          method: 'POST', 
+          body: JSON.stringify(announcementData) 
+        });
+      } catch (err) {
+        console.warn('Backend announcement save failed, using localStorage:', err);
+      }
+      // Always save to localStorage as backup
       localStorage.setItem('announcement', JSON.stringify(announcementData));
       setAnnouncement(announcementText);
       setEditingAnnouncement(false);
@@ -563,8 +566,15 @@ export default function SwordXStaffCommunity() {
     }
   }, [announcementText, announcementColor, logAction]);
 
-  const deleteAnnouncement = useCallback(() => {
+  const deleteAnnouncement = useCallback(async () => {
     if (confirm('Delete this announcement?')) {
+      try {
+        // Try to delete from backend
+        await api('/api/announcements', { method: 'DELETE' });
+      } catch (err) {
+        console.warn('Backend announcement delete failed, using localStorage:', err);
+      }
+      // Always remove from localStorage
       localStorage.removeItem('announcement');
       setAnnouncement(null);
       setAnnouncementText('');
@@ -1205,44 +1215,6 @@ export default function SwordXStaffCommunity() {
                     Delete
                   </button>
                 )}
-              </div>
-
-              {/* Debug Info for Admins */}
-              <div className="mb-4 bg-slate-700/20 border border-slate-600/30 rounded p-3 text-xs">
-                <p className="text-slate-400 mb-2"><span className="text-slate-500">Debug:</span> announcement state = {announcement ? `"${announcement}"` : 'null'}</p>
-                <p className="text-slate-400 mb-2"><span className="text-slate-500">Color:</span> {announcementColor}</p>
-                <p className="text-slate-400 mb-3"><span className="text-slate-500">localStorage:</span> {localStorage.getItem('announcement') ? `${localStorage.getItem('announcement').substring(0, 50)}...` : 'empty'}</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      const testAnnouncement = { text: "🧪 Test Announcement - If you see this, it works!", color: "blue" };
-                      localStorage.setItem('announcement', JSON.stringify(testAnnouncement));
-                      setAnnouncement(testAnnouncement.text);
-                      setAnnouncementColor(testAnnouncement.color);
-                      alert('Test announcement created! Refresh the page to see it at the top.');
-                    }}
-                    className="px-2 py-1 text-xs bg-blue-600/40 hover:bg-blue-600/60 rounded text-blue-300"
-                  >
-                    Test Announcement
-                  </button>
-                  <button
-                    onClick={() => {
-                      localStorage.removeItem('announcement');
-                      setAnnouncement(null);
-                      setAnnouncementText('');
-                      alert('Announcement cleared from storage');
-                    }}
-                    className="px-2 py-1 text-xs bg-red-600/40 hover:bg-red-600/60 rounded text-red-300"
-                  >
-                    Clear Storage
-                  </button>
-                  <button
-                    onClick={() => window.location.reload()}
-                    className="px-2 py-1 text-xs bg-amber-600/40 hover:bg-amber-600/60 rounded text-amber-300"
-                  >
-                    Refresh Page
-                  </button>
-                </div>
               </div>
 
               {editingAnnouncement ? (
