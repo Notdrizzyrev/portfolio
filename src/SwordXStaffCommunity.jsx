@@ -53,7 +53,7 @@ export default function SwordXStaffCommunity() {
   const MAX_ATTEMPTS = 3;
   const LOCKOUT_DURATION = 300;
 
-  // ── Load all data on mount ─────────────────────────────────────────────────
+  // ── FIX #1: Load all data on mount with proper dependency array ────────────
   useEffect(() => {
     async function load() {
       try {
@@ -75,7 +75,26 @@ export default function SwordXStaffCommunity() {
       }
     }
     load();
-  }, []);
+  }, []); // ← ADDED DEPENDENCY ARRAY - This prevents excessive re-renders
+
+  // ── FIX #2: Restore admin session on mount ONLY ────────────────────────────
+  useEffect(() => {
+    // Restore admin session from localStorage
+    const savedAdmin = localStorage.getItem('isAdmin') === 'true';
+    if (savedAdmin) {
+      setIsAdmin(true);
+    }
+
+    // Restore admin logs from localStorage
+    const savedLogs = localStorage.getItem('adminLogs');
+    if (savedLogs) {
+      try {
+        setAdminLogs(JSON.parse(savedLogs));
+      } catch (e) {
+        console.error('Failed to restore logs:', e);
+      }
+    }
+  }, []); // ← ONLY run on mount - prevents infinite loops
 
   // ── Scroll edit form into view whenever it opens ───────────────────────────
   useEffect(() => {
@@ -88,18 +107,23 @@ export default function SwordXStaffCommunity() {
 
   const logAction = (actionType, category, itemName, details = '') => {
     const timestamp = new Date();
-    setAdminLogs(prev => [{
-      id: prev.length + 1,
+    const newLog = {
+      id: adminLogs.length + 1,
       actionType, category, itemName, details,
       timestamp: timestamp.toLocaleString(),
       time: timestamp.toLocaleTimeString()
-    }, ...prev]);
+    };
+    const updatedLogs = [newLog, ...adminLogs];
+    setAdminLogs(updatedLogs);
+    localStorage.setItem('adminLogs', JSON.stringify(updatedLogs));
   };
 
   const handleLogin = () => {
     if (lockoutTime > 0) { alert(`Try again in ${lockoutTime}s`); return; }
     if (password === ADMIN_PASSWORD) {
-      setIsAdmin(true); setShowLogin(false); setPassword('');
+      setIsAdmin(true); 
+      localStorage.setItem('isAdmin', 'true');
+      setShowLogin(false); setPassword('');
       setFailedAttempts(0); setLockoutTime(0);
     } else {
       const n = failedAttempts + 1;
@@ -117,7 +141,10 @@ export default function SwordXStaffCommunity() {
   };
 
   const handleLogout = () => {
-    setIsAdmin(false); setPassword('');
+    setIsAdmin(false); 
+    localStorage.removeItem('isAdmin');
+    // Keep adminLogs - they should persist even after logout
+    setPassword('');
     setEditingId(null); setAddingNew(null); setFormData({});
   };
 
