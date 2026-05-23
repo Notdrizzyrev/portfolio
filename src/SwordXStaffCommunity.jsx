@@ -79,7 +79,7 @@ export default function SwordXStaffCommunity() {
     load();
   }, []);
 
-  // ── Restore admin session on mount ONLY ────────────────────────────────────
+  // ── Restore admin session and sections on mount ONLY ────────────────────────
   useEffect(() => {
     const savedAdmin = localStorage.getItem('isAdmin') === 'true';
     if (savedAdmin) {
@@ -94,7 +94,21 @@ export default function SwordXStaffCommunity() {
         console.error('Failed to restore logs:', e);
       }
     }
+
+    const savedSections = localStorage.getItem('sections');
+    if (savedSections) {
+      try {
+        setSections(JSON.parse(savedSections));
+      } catch (e) {
+        console.error('Failed to restore sections:', e);
+      }
+    }
   }, []);
+
+  // ── Save sections to localStorage whenever they change ──────────────────────
+  useEffect(() => {
+    localStorage.setItem('sections', JSON.stringify(sections));
+  }, [sections]);
 
   // ── Scroll edit form into view whenever it opens ───────────────────────────
   useEffect(() => {
@@ -335,21 +349,26 @@ export default function SwordXStaffCommunity() {
     }
 
     if (editingSectionId) {
-      setSections(sections.map(s =>
-        s.id === editingSectionId
-          ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
-          : s
-      ));
-      logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
+      setSections(prevSections => {
+        const updated = prevSections.map(s =>
+          s.id === editingSectionId
+            ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
+            : s
+        );
+        logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
+        return updated;
+      });
     } else {
       const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
       const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
-      setSections([...sections, newSection]);
-      logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
+      setSections(prevSections => {
+        logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
+        return [...prevSections, newSection];
+      });
     }
 
     cancelSectionEdit();
-  }, [editingSectionId, sectionFormData, sections, logAction]);
+  }, [editingSectionId, sectionFormData, logAction]);
 
   const cancelSectionEdit = useCallback(() => {
     setEditingSectionId(null);
@@ -365,16 +384,20 @@ export default function SwordXStaffCommunity() {
 
   const deleteSection = useCallback((id) => {
     const section = sections.find(s => s.id === id);
-    if (!confirm(`Delete section "${section?.name}"?`)) return;
-    setSections(sections.filter(s => s.id !== id));
-    logAction('DELETE', 'SECTION', section?.name, `Deleted section: ${section?.name}`);
+    if (!section) return;
+    if (!confirm(`Delete section "${section.name}"?`)) return;
+    
+    setSections(prevSections => prevSections.filter(s => s.id !== id));
+    logAction('DELETE', 'SECTION', section.name, `Deleted section: ${section.name}`);
   }, [sections, logAction]);
 
   const toggleSectionVisibility = useCallback((id) => {
-    setSections(sections.map(s =>
-      s.id === id ? { ...s, visible: !s.visible } : s
-    ));
-  }, [sections]);
+    setSections(prevSections =>
+      prevSections.map(s =>
+        s.id === id ? { ...s, visible: !s.visible } : s
+      )
+    );
+  }, []);
 
   // ── Shared form styles ─────────────────────────────────────────────────────
   const inputCls = 'px-4 py-2 bg-slate-700 border border-amber-600/30 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-full';
