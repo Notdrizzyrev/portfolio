@@ -81,6 +81,10 @@ export default function SwordXStaffCommunity() {
     guide: 'Read our guides to get started',
   });
   const [editingNoteSection, setEditingNoteSection] = useState(null);
+  const [announcement, setAnnouncement] = useState(null);
+  const [announcementText, setAnnouncementText] = useState('');
+  const [announcementColor, setAnnouncementColor] = useState('amber'); // amber, red, blue, green
+  const [editingAnnouncement, setEditingAnnouncement] = useState(false);
 
   // ── Edit form scroll ref (fixes the "edit button does nothing" bug) ─────────
   const editFormRef = useRef(null);
@@ -177,6 +181,18 @@ export default function SwordXStaffCommunity() {
         setSectionNotes(JSON.parse(savedSectionNotes));
       } catch (e) {
         console.error('Failed to restore section notes:', e);
+      }
+    }
+
+    // Restore announcement from localStorage
+    const savedAnnouncement = localStorage.getItem('announcement');
+    if (savedAnnouncement) {
+      try {
+        const parsed = JSON.parse(savedAnnouncement);
+        setAnnouncement(parsed.text);
+        setAnnouncementColor(parsed.color || 'amber');
+      } catch (e) {
+        console.error('Failed to restore announcement:', e);
       }
     }
   }, []);
@@ -536,6 +552,26 @@ export default function SwordXStaffCommunity() {
     logAction('EDIT', 'SECTION_NOTE', sectionId, `Updated ${sectionId} note`);
   }, [sectionNotes, logAction]);
 
+  // ── ANNOUNCEMENT MANAGEMENT ────────────────────────────────────────────────
+  const saveAnnouncement = useCallback(() => {
+    if (announcementText.trim()) {
+      const announcementData = { text: announcementText, color: announcementColor };
+      localStorage.setItem('announcement', JSON.stringify(announcementData));
+      setAnnouncement(announcementText);
+      setEditingAnnouncement(false);
+      logAction('EDIT', 'ANNOUNCEMENT', announcementText.substring(0, 30), 'Updated announcement');
+    }
+  }, [announcementText, announcementColor, logAction]);
+
+  const deleteAnnouncement = useCallback(() => {
+    if (confirm('Delete this announcement?')) {
+      localStorage.removeItem('announcement');
+      setAnnouncement(null);
+      setAnnouncementText('');
+      logAction('DELETE', 'ANNOUNCEMENT', 'Announcement', 'Deleted announcement');
+    }
+  }, [logAction]);
+
   // ── Shared form styles ─────────────────────────────────────────────────────
   const inputCls = 'px-4 py-2 bg-slate-700 border border-amber-600/30 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-full';
 
@@ -683,7 +719,36 @@ export default function SwordXStaffCommunity() {
         )}
       </header>
 
-      {/* Nav */}
+      {/* Announcement Banner */}
+      {announcement && (
+        <div style={{
+          background: announcementColor === 'red' ? 'rgba(220, 38, 38, 0.3)' : 
+                     announcementColor === 'blue' ? 'rgba(37, 99, 235, 0.3)' :
+                     announcementColor === 'green' ? 'rgba(34, 197, 94, 0.3)' :
+                     'rgba(180, 83, 9, 0.3)',
+          borderBottom: `3px solid ${
+            announcementColor === 'red' ? 'rgb(220, 38, 38)' :
+            announcementColor === 'blue' ? 'rgb(37, 99, 235)' :
+            announcementColor === 'green' ? 'rgb(34, 197, 94)' :
+            'rgb(180, 83, 9)'
+          }`
+        }} className="backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 flex-1">
+              <span className="text-2xl">📢</span>
+              <p className="text-white font-semibold">{announcement}</p>
+            </div>
+            {isAdmin && (
+              <button 
+                onClick={() => setEditingAnnouncement(true)}
+                className="px-3 py-1 text-xs bg-slate-600/60 hover:bg-slate-600/80 rounded flex items-center gap-1 whitespace-nowrap text-slate-200"
+              >
+                <Edit3 size={12} /> Edit
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <nav className="sticky top-0 z-40 border-b border-amber-900/20 backdrop-blur-sm bg-slate-950/50">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex gap-2 overflow-x-auto">
@@ -1041,6 +1106,17 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
 
+            <SectionNote 
+              sectionId={activeTab}
+              isAdmin={isAdmin}
+              editingNoteSection={editingNoteSection}
+              setEditingNoteSection={setEditingNoteSection}
+              sectionNotes={sectionNotes}
+              setSectionNotes={setSectionNotes}
+              inputCls={inputCls}
+              saveCodesNote={saveCodesNote}
+            />
+
             {isAdmin && (addingNew?.startsWith('custom-') || editingId?.startsWith('custom-item-')) && (
               <EditForm title={editingId ? 'Edit Item' : 'Add New Item'} onSave={saveCustomItem}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
@@ -1117,15 +1193,116 @@ export default function SwordXStaffCommunity() {
               </div>
             </div>
 
-            {/* Edit Section Notes */}
+            {/* Announcements */}
+            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-lg text-slate-300">📢 Announcements</h3>
+                {!editingAnnouncement && announcement && (
+                  <button 
+                    onClick={() => deleteAnnouncement()}
+                    className="px-3 py-1 text-xs bg-red-600/40 hover:bg-red-600/60 rounded text-red-300"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+
+              {editingAnnouncement ? (
+                <div className="space-y-4 bg-slate-700/30 p-4 rounded-lg">
+                  <textarea 
+                    className={`${inputCls} h-20`}
+                    placeholder='e.g., "Check the new YouTube video!" or "Server maintenance tomorrow at 2PM"'
+                    value={announcementText}
+                    onChange={(e) => setAnnouncementText(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="space-y-2">
+                    <label className="text-sm text-slate-400">Color Theme:</label>
+                    <div className="flex gap-2 flex-wrap">
+                      {[
+                        { name: 'amber', label: '🟡 Amber', bg: 'rgb(180, 83, 9)', bgLight: 'rgba(180, 83, 9, 0.2)' },
+                        { name: 'red', label: '🔴 Red', bg: 'rgb(220, 38, 38)', bgLight: 'rgba(220, 38, 38, 0.2)' },
+                        { name: 'blue', label: '🔵 Blue', bg: 'rgb(37, 99, 235)', bgLight: 'rgba(37, 99, 235, 0.2)' },
+                        { name: 'green', label: '🟢 Green', bg: 'rgb(34, 197, 94)', bgLight: 'rgba(34, 197, 94, 0.2)' },
+                      ].map(color => (
+                        <button
+                          key={color.name}
+                          onClick={() => setAnnouncementColor(color.name)}
+                          style={{
+                            background: announcementColor === color.name ? color.bg : color.bgLight,
+                            border: announcementColor === color.name ? `2px solid ${color.bg}` : '1px solid transparent',
+                          }}
+                          className="px-4 py-2 rounded-lg font-semibold text-sm transition-all text-white"
+                        >
+                          {color.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={saveAnnouncement}
+                      className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold flex items-center justify-center gap-2 text-white"
+                    >
+                      <Save size={16} /> Save
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setEditingAnnouncement(false);
+                        setAnnouncementText(announcement || '');
+                      }}
+                      className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : announcement ? (
+                <div style={{
+                  background: announcementColor === 'red' ? 'rgba(220, 38, 38, 0.15)' :
+                             announcementColor === 'blue' ? 'rgba(37, 99, 235, 0.15)' :
+                             announcementColor === 'green' ? 'rgba(34, 197, 94, 0.15)' :
+                             'rgba(180, 83, 9, 0.15)',
+                  borderColor: announcementColor === 'red' ? 'rgba(220, 38, 38, 0.3)' :
+                              announcementColor === 'blue' ? 'rgba(37, 99, 235, 0.3)' :
+                              announcementColor === 'green' ? 'rgba(34, 197, 94, 0.3)' :
+                              'rgba(180, 83, 9, 0.3)'
+                }} className="border rounded-lg p-4">
+                  <p className="text-slate-300 mb-3 font-semibold">Current:</p>
+                  <p className="text-slate-200 mb-4">{announcement}</p>
+                  <button 
+                    onClick={() => {
+                      setEditingAnnouncement(true);
+                      setAnnouncementText(announcement);
+                    }}
+                    className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold flex items-center gap-2 text-amber-300"
+                  >
+                    <Edit3 size={14} /> Edit
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-slate-700/30 rounded-lg p-4 text-center">
+                  <p className="text-slate-400 text-sm mb-3">No announcement active</p>
+                  <button 
+                    onClick={() => setEditingAnnouncement(true)}
+                    className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold text-amber-300"
+                  >
+                    Create Announcement
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
               <h3 className="font-bold text-lg text-slate-300 mb-4">📝 Section Notes</h3>
               <div className="space-y-4">
-                {['classes', 'events', 'codes', 'guide'].map(sectionId => (
-                  <div key={sectionId} className="bg-slate-700/30 rounded-lg p-4 border border-slate-600/30">
+                {sections.map(section => (
+                  <div key={section.id} className="bg-slate-700/30 rounded-lg p-4 border border-slate-600/30">
                     <div className="flex items-center justify-between mb-3">
-                      <label className="font-semibold text-slate-300 capitalize">{sectionId}</label>
-                      {editingNoteSection === sectionId ? (
+                      <div className="flex items-center gap-2">
+                        <label className="font-semibold text-slate-300">{section.name}</label>
+                        <code className="text-xs bg-slate-900/50 px-2 py-1 rounded text-slate-400">{section.id}</code>
+                      </div>
+                      {editingNoteSection === section.id ? (
                         <button 
                           onClick={() => setEditingNoteSection(null)} 
                           className="px-2 py-1 text-xs bg-slate-600 hover:bg-slate-500 rounded"
@@ -1134,30 +1311,30 @@ export default function SwordXStaffCommunity() {
                         </button>
                       ) : (
                         <button 
-                          onClick={() => setEditingNoteSection(sectionId)} 
+                          onClick={() => setEditingNoteSection(section.id)} 
                           className="px-2 py-1 text-xs bg-blue-600/40 hover:bg-blue-600/60 rounded flex items-center gap-1"
                         >
                           <Edit3 size={12} /> Edit
                         </button>
                       )}
                     </div>
-                    {editingNoteSection === sectionId ? (
+                    {editingNoteSection === section.id ? (
                       <div className="space-y-2">
                         <textarea 
                           className={`${inputCls} h-20`}
-                          value={sectionNotes[sectionId] || ''}
-                          onChange={(e) => setSectionNotes({ ...sectionNotes, [sectionId]: e.target.value })}
+                          value={sectionNotes[section.id] || ''}
+                          onChange={(e) => setSectionNotes({ ...sectionNotes, [section.id]: e.target.value })}
                           autoFocus
                         />
                         <button 
-                          onClick={() => saveCodesNote(sectionId)}
+                          onClick={() => saveCodesNote(section.id)}
                           className="px-3 py-1 text-sm bg-green-600 hover:bg-green-500 rounded font-semibold flex items-center gap-2"
                         >
                           <Save size={14} /> Save
                         </button>
                       </div>
                     ) : (
-                      <p className="text-slate-400 text-sm">{sectionNotes[sectionId]}</p>
+                      <p className="text-slate-400 text-sm">{sectionNotes[section.id] || '(No note set)'}</p>
                     )}
                   </div>
                 ))}
