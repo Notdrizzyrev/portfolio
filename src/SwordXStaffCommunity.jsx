@@ -657,6 +657,13 @@ export default function SwordXStaffCommunity() {
                 <input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => handleFormDataChange('name', e.target.value)} />
                 <input className={inputCls} placeholder="Role" value={formData.role || ''} onChange={e => handleFormDataChange('role', e.target.value)} />
                 <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    📁 Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                </div>
                 <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
                 <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
               </EditForm>
@@ -723,6 +730,13 @@ export default function SwordXStaffCommunity() {
               <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
                 <input className={`col-span-2 ${inputCls}`} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    📁 Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                </div>
                 <select className={`col-span-2 ${inputCls}`} value={formData.status || 'UPCOMING'} onChange={e => handleFormDataChange('status', e.target.value)}>
                   <option>LIVE</option>
                   <option>UPCOMING</option>
@@ -858,6 +872,14 @@ export default function SwordXStaffCommunity() {
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <input className={`col-span-2 ${inputCls}`} placeholder="Image URL (optional)" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    📁 Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                </div>
                 <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
               </EditForm>
             )}
@@ -869,19 +891,26 @@ export default function SwordXStaffCommunity() {
             ) : (
               <div className="grid md:grid-cols-2 gap-6">
                 {guides.map((guide) => (
-                  <div key={guide.id} className="bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl p-6 hover:border-amber-600/50 transition-all">
-                    <h3 className="font-bold text-lg text-amber-300 mb-3">{guide.title}</h3>
-                    <p className="text-slate-300 text-sm leading-relaxed mb-4">{guide.content}</p>
-                    {isAdmin && (
-                      <div className="flex gap-2">
-                        <button onClick={() => startEditGuide(guide)} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1">
-                          <Edit3 size={14} /> Edit
-                        </button>
-                        <button onClick={() => deleteGuide(guide.id)} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1">
-                          <Trash2 size={14} /> Delete
-                        </button>
+                  <div key={guide.id} className="bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    {guide.image && (
+                      <div className="h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                        <img src={guide.image} alt={guide.title} className="w-full h-full object-cover" />
                       </div>
                     )}
+                    <div className="p-6">
+                      <h3 className="font-bold text-lg text-amber-300 mb-3">{guide.title}</h3>
+                      <p className="text-slate-300 text-sm leading-relaxed mb-4">{guide.content}</p>
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <button onClick={() => startEditGuide(guide)} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1">
+                            <Edit3 size={14} /> Edit
+                          </button>
+                          <button onClick={() => deleteGuide(guide.id)} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1">
+                            <Trash2 size={14} /> Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
