@@ -47,7 +47,7 @@ const SectionNote = ({
     ) : (
       <div className="flex items-start justify-between gap-2">
         <p className="text-blue-200 text-sm flex items-start gap-2 flex-1">
-          <span className="flex-shrink-0 mt-0.5">ℹ️</span>
+          <span className="flex-shrink-0 mt-0.5">[INFO]</span>
           <span>{sectionNotes[sectionId]}</span>
         </p>
         {isAdmin && (
@@ -75,7 +75,7 @@ export default function SwordXStaffCommunity() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sectionNotes, setSectionNotes] = useState({
-    codes: 'Redeem codes in-game at: Home → Main Menu → User Center → Gift Code',
+    codes: 'Redeem codes in-game at: Home -> Main Menu -> User Center -> Gift Code',
     classes: 'Learn about our different classes and their abilities',
     events: 'Check out upcoming events and special occasions',
     guide: 'Read our guides to get started',
@@ -119,23 +119,29 @@ export default function SwordXStaffCommunity() {
     async function load() {
       try {
         setLoading(true);
-        const [c, cl, ev, g, ann] = await Promise.all([
+        const [c, cl, ev, g, ann, notes] = await Promise.all([
           api('/api/codes'),
           api('/api/classes'),
           api('/api/events'),
           api('/api/guides'),
           api('/api/announcements').catch(() => ({ text: '', color: 'amber' })), // fallback if endpoint doesn't exist
+          api('/api/section-notes').catch(() => ({})), // fallback if endpoint doesn't exist
         ]);
         setCodes(c);
         setClasses(cl);
         setEvents(ev);
         setGuides(g);
+        console.log('Note: Loaded announcement from API:', ann);
         if (ann?.text) {
           setAnnouncement(ann.text);
           setAnnouncementColor(ann.color || 'amber');
         }
+        console.log('Note: Loaded section notes from API:', notes);
+        if (notes && Object.keys(notes).length > 0) {
+          setSectionNotes(notes);
+        }
       } catch (err) {
-        console.error('Failed to load data:', err);
+        console.error('Note: Failed to load data:', err);
       } finally {
         setLoading(false);
       }
@@ -179,15 +185,7 @@ export default function SwordXStaffCommunity() {
       }
     }
 
-    // Restore all section notes from localStorage
-    const savedSectionNotes = localStorage.getItem('sectionNotes');
-    if (savedSectionNotes) {
-      try {
-        setSectionNotes(JSON.parse(savedSectionNotes));
-      } catch (e) {
-        console.error('Failed to restore section notes:', e);
-      }
-    }
+
   }, []);
 
   // ── SAVE SECTIONS TO LOCALSTORAGE WHENEVER THEY CHANGE ──────────────────────
@@ -238,12 +236,12 @@ export default function SwordXStaffCommunity() {
       setFailedAttempts(n); setPassword('');
       if (n >= MAX_ATTEMPTS) {
         setLockoutTime(LOCKOUT_DURATION);
-        alert(`❌ LOCKED OUT! Try again in ${LOCKOUT_DURATION} seconds.`);
+        alert(`LOCKED OUT! Try again in ${LOCKOUT_DURATION} seconds.`);
         const interval = setInterval(() => {
           setLockoutTime(prev => { if (prev <= 1) { clearInterval(interval); return 0; } return prev - 1; });
         }, 1000);
       } else {
-        alert(`❌ Incorrect. Attempts remaining: ${MAX_ATTEMPTS - n}`);
+        alert(`Incorrect. Attempts remaining: ${MAX_ATTEMPTS - n}`);
       }
     }
   }, [password, failedAttempts, lockoutTime]);
@@ -537,29 +535,43 @@ export default function SwordXStaffCommunity() {
     reader.readAsDataURL(file);
   }, []);
 
-  // ── SAVE CODES NOTE ───────────────────────────────────────────────────────
-  const saveCodesNote = useCallback((sectionId) => {
-    const updated = { ...sectionNotes };
-    localStorage.setItem('sectionNotes', JSON.stringify(updated));
+  // ── SAVE SECTION NOTE ───────────────────────────────────────────────────────
+  const saveCodesNote = useCallback(async (sectionId) => {
+    const noteText = sectionNotes[sectionId];
+    console.log('Note: Saving section note:', sectionId, noteText);
+    try {
+      // Save to backend only
+      await api('/api/section-notes', { 
+        method: 'POST', 
+        body: JSON.stringify({ sectionId, note: noteText })
+      });
+      console.log('Note: Backend save successful');
+    } catch (err) {
+      console.error('Note: Failed to save section note:', err.message);
+      alert('Failed to save section note: ' + err.message);
+    }
     setEditingNoteSection(null);
-    logAction('EDIT', 'SECTION_NOTE', sectionId, `Updated ${sectionId} note`);
+    logAction('EDIT', 'SECTION_NOTE', sectionId, 'Updated section note');
   }, [sectionNotes, logAction]);
 
   // ── ANNOUNCEMENT MANAGEMENT ────────────────────────────────────────────────
   const saveAnnouncement = useCallback(async () => {
     if (announcementText.trim()) {
       const announcementData = { text: announcementText, color: announcementColor };
+      console.log('Note: Saving announcement:', announcementData);
       try {
         // Try to save to backend
-        await api('/api/announcements', { 
+        const result = await api('/api/announcements', { 
           method: 'POST', 
           body: JSON.stringify(announcementData) 
         });
+        console.log('Note: Backend save successful:', result);
       } catch (err) {
-        console.warn('Backend announcement save failed, using localStorage:', err);
+        console.error('Note: Backend announcement save failed:', err.message);
       }
       // Always save to localStorage as backup
       localStorage.setItem('announcement', JSON.stringify(announcementData));
+      console.log('Note: Saved to localStorage backup');
       setAnnouncement(announcementText);
       setEditingAnnouncement(false);
       logAction('EDIT', 'ANNOUNCEMENT', announcementText.substring(0, 30), 'Updated announcement');
@@ -596,7 +608,7 @@ export default function SwordXStaffCommunity() {
           className="px-6 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 rounded-lg font-semibold flex items-center gap-2"
         >
           {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? 'Saving...' : 'Save'}
         </button>
         <button onClick={cancelEdit} className="px-6 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg">
           Cancel
@@ -619,7 +631,7 @@ export default function SwordXStaffCommunity() {
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="text-center">
           <Loader2 size={48} className="animate-spin text-amber-400 mx-auto mb-4" />
-          <p className="text-slate-400">Loading Sword X Staff…</p>
+          <p className="text-slate-400">Loading Sword X Staff...</p>
         </div>
       </div>
     );
@@ -652,7 +664,7 @@ export default function SwordXStaffCommunity() {
                 onClick={() => setShowLogs(!showLogs)}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600/30 hover:bg-blue-600/40 border border-blue-600/50 rounded-lg transition-all"
               >
-                📋 Logs ({adminLogs.length})
+                [LOG] Logs ({adminLogs.length})
               </button>
               <button
                 onClick={handleLogout}
@@ -670,7 +682,7 @@ export default function SwordXStaffCommunity() {
             <div className="max-w-7xl mx-auto">
               {lockoutTime > 0 ? (
                 <div className="bg-red-900/40 border border-red-600/60 rounded-lg p-4 text-center">
-                  <p className="text-red-200 font-bold text-lg mb-2">🔒 ACCOUNT LOCKED</p>
+                  <p className="text-red-200 font-bold text-lg mb-2">[LOCK] ACCOUNT LOCKED</p>
                   <p className="text-red-400 text-sm font-mono">Retry in: {lockoutTime}s</p>
                 </div>
               ) : (
@@ -691,7 +703,7 @@ export default function SwordXStaffCommunity() {
                   </button>
                   {failedAttempts > 0 && (
                     <div className="px-4 py-2 bg-red-900/40 border border-red-600/50 rounded-lg flex items-center gap-2">
-                      <span className="text-red-300 text-sm font-bold">⚠️ {failedAttempts}/{MAX_ATTEMPTS} Failed</span>
+                      <span className="text-red-300 text-sm font-bold">{failedAttempts}/{MAX_ATTEMPTS} Failed</span>
                     </div>
                   )}
                 </div>
@@ -704,7 +716,7 @@ export default function SwordXStaffCommunity() {
         {isAdmin && showLogs && (
           <div className="border-t border-blue-900/20 bg-slate-900/50 backdrop-blur p-6">
             <div className="max-w-7xl mx-auto">
-              <h3 className="font-bold text-lg text-blue-300 mb-4">📋 Admin Action Logs</h3>
+              <h3 className="font-bold text-lg text-blue-300 mb-4">[LOG] Admin Action Logs</h3>
               {adminLogs.length === 0 ? (
                 <p className="text-slate-400">No admin actions yet.</p>
               ) : (
@@ -745,7 +757,7 @@ export default function SwordXStaffCommunity() {
         }} className="backdrop-blur px-6 py-4">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 flex-1">
-              <span className="text-2xl">📢</span>
+              <span className="text-2xl">!</span>
               <p className="text-white font-semibold">{announcement}</p>
             </div>
             {isAdmin && (
@@ -817,10 +829,10 @@ export default function SwordXStaffCommunity() {
                 <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
                 <div className="col-span-2 flex items-center gap-2">
                   <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
-                    📁 Upload Image
+                    [UPLOAD] Upload Image
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                   </label>
-                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
                 </div>
                 <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
                 <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
@@ -901,10 +913,10 @@ export default function SwordXStaffCommunity() {
                 <input className={`col-span-2 ${inputCls}`} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
                 <div className="col-span-2 flex items-center gap-2">
                   <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
-                    📁 Upload Image
+                    [UPLOAD] Upload Image
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                   </label>
-                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
                 </div>
                 <select className={`col-span-2 ${inputCls}`} value={formData.status || 'UPCOMING'} onChange={e => handleFormDataChange('status', e.target.value)}>
                   <option>LIVE</option>
@@ -1059,10 +1071,10 @@ export default function SwordXStaffCommunity() {
                 <input className={`col-span-2 ${inputCls}`} placeholder="Image URL (optional)" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
                 <div className="col-span-2 flex items-center gap-2">
                   <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
-                    📁 Upload Image
+                    [UPLOAD] Upload Image
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                   </label>
-                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
                 </div>
                 <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
               </EditForm>
@@ -1134,10 +1146,10 @@ export default function SwordXStaffCommunity() {
                 <input className={inputCls} placeholder="Image URL (optional)" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
                 <div className="col-span-2 flex items-center gap-2">
                   <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
-                    📁 Upload Image
+                    [UPLOAD] Upload Image
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                   </label>
-                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">✓ Image selected</span>}
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
                 </div>
                 <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
                 <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details/Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
@@ -1206,7 +1218,7 @@ export default function SwordXStaffCommunity() {
             {/* Announcements */}
             <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
               <div className="flex justify-between items-center mb-6">
-                <h3 className="font-bold text-lg text-slate-300">📢 Announcements</h3>
+                <h3 className="font-bold text-lg text-slate-300">Announcements</h3>
                 {!editingAnnouncement && announcement && (
                   <button 
                     onClick={() => deleteAnnouncement()}
@@ -1303,7 +1315,7 @@ export default function SwordXStaffCommunity() {
               )}
             </div>
             <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
-              <h3 className="font-bold text-lg text-slate-300 mb-4">📝 Section Notes</h3>
+              <h3 className="font-bold text-lg text-slate-300 mb-4">Section Notes</h3>
               <div className="space-y-4">
                 {sections.map(section => (
                   <div key={section.id} className="bg-slate-700/30 rounded-lg p-4 border border-slate-600/30">
@@ -1452,7 +1464,7 @@ export default function SwordXStaffCommunity() {
             rel="noopener noreferrer"
             className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold text-sm transition-all flex items-center gap-2"
           >
-            💜 Join Discord Server
+            [HEART] Join Discord Server
           </a>
         </div>
       </footer>
