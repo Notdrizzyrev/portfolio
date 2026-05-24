@@ -675,6 +675,14 @@ export default function SwordXStaffCommunity() {
                 <input className={`col-span-2 ${inputCls}`} placeholder="Code" value={formData.code || ''} onChange={e => handleFormDataChange('code', e.target.value)} />
                 <input className={inputCls} placeholder="Reward" value={formData.reward || ''} onChange={e => handleFormDataChange('reward', e.target.value)} />
                 <input className={inputCls} placeholder="Location" value={formData.location || ''} onChange={e => handleFormDataChange('location', e.target.value)} />
+                <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    [UPLOAD] Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                </div>
               </EditForm>
             )}
             {codes.length === 0 ? (
@@ -684,23 +692,30 @@ export default function SwordXStaffCommunity() {
             ) : (
               <div className="grid gap-4">
                 {codes.map((code) => (
-                  <div key={code.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl p-4 hover:border-amber-600/50 transition-all">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <h3 className="font-bold text-lg text-amber-300 font-mono">{code.code}</h3>
-                        <p className="text-sm text-slate-300 mt-1">{code.reward}</p>
-                        <p className="text-xs text-slate-400 mt-1">{code.location}</p>
+                  <div key={code.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    {code.image && (
+                      <div className="relative h-32 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                        <img src={code.image} alt={code.code} className="w-full h-full object-cover" />
                       </div>
-                      <div className="flex gap-2">
-                        <button onClick={() => copyToClipboard(code.code)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1">
-                          {copiedCode === code.code ? <Check size={14} /> : <Copy size={14} />}
-                        </button>
-                        {isAdmin && (
-                          <>
-                            <button onClick={() => startEditCode(code)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
-                            <button onClick={() => deleteCode(code.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
-                          </>
-                        )}
+                    )}
+                    <div className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h3 className="font-bold text-lg text-amber-300 font-mono">{code.code}</h3>
+                          <p className="text-sm text-slate-300 mt-1">{code.reward}</p>
+                          <p className="text-xs text-slate-400 mt-1">{code.location}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => copyToClipboard(code.code)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1">
+                            {copiedCode === code.code ? <Check size={14} /> : <Copy size={14} />}
+                          </button>
+                          {isAdmin && (
+                            <>
+                              <button onClick={() => startEditCode(code)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
+                              <button onClick={() => deleteCode(code.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -784,6 +799,13 @@ export default function SwordXStaffCommunity() {
                 <input className={`col-span-2 ${inputCls}`} placeholder="Event Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
                 <input className={inputCls} placeholder="Status" value={formData.status || 'UPCOMING'} onChange={e => handleFormDataChange('status', e.target.value)} />
                 <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    [UPLOAD] Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                </div>
                 <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
                 <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
               </EditForm>
@@ -833,6 +855,14 @@ export default function SwordXStaffCommunity() {
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Guide Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    [UPLOAD] Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                </div>
                 <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
               </EditForm>
             )}
@@ -843,17 +873,24 @@ export default function SwordXStaffCommunity() {
             ) : (
               <div className="space-y-4">
                 {guides.map((guide) => (
-                  <div key={guide.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl p-6 hover:border-amber-600/50 transition-all">
-                    <div className="flex items-start justify-between mb-3">
-                      <h3 className="font-bold text-lg text-amber-300">{guide.title}</h3>
-                      {isAdmin && (
-                        <div className="flex gap-2">
-                          <button onClick={() => startEditGuide(guide)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
-                          <button onClick={() => deleteGuide(guide.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
-                        </div>
-                      )}
+                  <div key={guide.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    {guide.image && (
+                      <div className="relative h-40 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                        <img src={guide.image} alt={guide.title} className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div className="p-6">
+                      <div className="flex items-start justify-between mb-3">
+                        <h3 className="font-bold text-lg text-amber-300">{guide.title}</h3>
+                        {isAdmin && (
+                          <div className="flex gap-2">
+                            <button onClick={() => startEditGuide(guide)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
+                            <button onClick={() => deleteGuide(guide.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-300 whitespace-pre-wrap">{guide.content}</p>
                     </div>
-                    <p className="text-sm text-slate-300 whitespace-pre-wrap">{guide.content}</p>
                   </div>
                 ))}
               </div>
