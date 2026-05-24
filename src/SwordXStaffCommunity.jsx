@@ -252,7 +252,7 @@ export default function SwordXStaffCommunity() {
             // Add custom sections from API, converting section_id to id for consistency
             const customs = secs
               .filter(s => s.section_id && !defaultIds.includes(s.section_id))
-              .map(s => ({ ...s, id: s.section_id })); // Use section_id as the identifier
+              .map(s => ({ ...s, id: s.section_id, visible: s.visible !== false })); // Ensure visible property
             return [...defaults, ...customs];
           });
         }
@@ -564,7 +564,74 @@ export default function SwordXStaffCommunity() {
     );
   }, [guides, logAction]);
 
-  // SECTIONS - FIXED FIX #2 AND FIX #3
+  // CUSTOM SECTION ITEMS - FIX #5: Add custom section support
+  const startEditCustomItem = useCallback((sectionId, item) => {
+    setAddingNew(null);
+    setEditingId(`custom-${sectionId}-${item.id}`);
+    setFormData({ ...item, sectionId });
+  }, []);
+
+  const saveCustomItem = useCallback(async () => {
+    setSaving(true);
+    try {
+      const sectionId = formData.sectionId;
+      if (editingId?.startsWith('custom-')) {
+        // Update existing
+        const updatedItems = (customSectionItems[sectionId] || []).map(i =>
+          i.id === formData.id ? formData : i
+        );
+        setCustomSectionItems({ ...customSectionItems, [sectionId]: updatedItems });
+        localStorage.setItem('customSectionItems', JSON.stringify({ ...customSectionItems, [sectionId]: updatedItems }));
+        await api('/api/custom-items', {
+          method: 'POST',
+          body: JSON.stringify({ sectionId, items: updatedItems })
+        });
+        logAction('EDIT', 'CUSTOM_ITEM', formData.title, `Updated item in ${sectionId}`);
+      } else {
+        // Create new
+        const newItem = { ...formData, id: Date.now() };
+        const updatedItems = [...(customSectionItems[sectionId] || []), newItem];
+        setCustomSectionItems({ ...customSectionItems, [sectionId]: updatedItems });
+        localStorage.setItem('customSectionItems', JSON.stringify({ ...customSectionItems, [sectionId]: updatedItems }));
+        await api('/api/custom-items', {
+          method: 'POST',
+          body: JSON.stringify({ sectionId, items: updatedItems })
+        });
+        logAction('ADD', 'CUSTOM_ITEM', formData.title, `Added item to ${sectionId}`);
+      }
+      cancelEdit();
+    } catch (err) {
+      showError(err.message);
+    }
+    setSaving(false);
+  }, [editingId, formData, customSectionItems, logAction, cancelEdit]);
+
+  const deleteCustomItem = useCallback((sectionId, itemId) => {
+    const item = (customSectionItems[sectionId] || []).find(i => i.id === itemId);
+    showConfirm(
+      'Delete Item',
+      `Are you sure you want to delete "${item?.title}"? This cannot be undone.`,
+      async () => {
+        try {
+          const updatedItems = (customSectionItems[sectionId] || []).filter(i => i.id !== itemId);
+          setCustomSectionItems({ ...customSectionItems, [sectionId]: updatedItems });
+          localStorage.setItem('customSectionItems', JSON.stringify({ ...customSectionItems, [sectionId]: updatedItems }));
+          await api('/api/custom-items', {
+            method: 'POST',
+            body: JSON.stringify({ sectionId, items: updatedItems })
+          });
+          logAction('DELETE', 'CUSTOM_ITEM', item?.title, `Deleted item from ${sectionId}`);
+        } catch (err) {
+          showError(err.message);
+        }
+      },
+      item?.title,
+      true,
+      'Delete'
+    );
+  }, [customSectionItems, logAction]);
+
+  // SECTIONS - FIX #2, #3, and #4
   const addSection = useCallback(() => {
     setAddingNewSection(true);
     setSectionFormData({ name: '', visible: true });
@@ -590,7 +657,7 @@ export default function SwordXStaffCommunity() {
           id: created.section_id || newId, 
           section_id: created.section_id || newId, 
           name: created.name, 
-          visible: created.visible 
+          visible: created.visible !== false 
         };
         setSections([...sections, newSection]);
         logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
@@ -632,9 +699,32 @@ export default function SwordXStaffCommunity() {
     );
   }, [sections, logAction]);
 
-  const toggleSectionVisibility = useCallback((id) => {
-    setSections(sections.map(s => s.id === id ? { ...s, visible: !s.visible } : s));
-  }, [sections]);
+  // FIX #4: Make toggleSectionVisibility persist to backend
+  const toggleSectionVisibility = useCallback(async (id) => {
+    const section = sections.find(s => s.id === id);
+    const newVisibility = !section?.visible;
+    
+    // Update local state immediately for UX
+    setSections(sections.map(s => s.id === id ? { ...s, visible: newVisibility } : s));
+    
+    // Persist to backend
+    try {
+      await api('/api/sections', { 
+        method: 'POST', 
+        body: JSON.stringify({ 
+          sectionId: section?.section_id || id, 
+          name: section?.name, 
+          visible: newVisibility 
+        }) 
+      });
+      logAction('EDIT', 'SECTION_VISIBILITY', section?.name, `Toggled visibility to ${newVisibility}`);
+    } catch (err) {
+      console.error('Failed to save visibility:', err);
+      // Revert on error
+      setSections(sections.map(s => s.id === id ? { ...s, visible: section?.visible } : s));
+      showError('Failed to save section visibility');
+    }
+  }, [sections, logAction]);
 
   const handleImageUpload = useCallback((e) => {
     const file = e.target.files?.[0];
@@ -1058,6 +1148,81 @@ export default function SwordXStaffCommunity() {
             )}
           </div>
         )}
+
+        {/* CUSTOM SECTIONS - FIX #5 */}
+        {sections.filter(s => !['classes', 'events', 'codes', 'guide'].includes(s.id)).map(customSection => (
+          activeTab === customSection.id && (
+            <div key={customSection.id} className="space-y-6">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-black bg-gradient-to-r from-purple-300 to-pink-500 bg-clip-text text-transparent">
+                  {customSection.name}
+                </h2>
+                {isAdmin && (
+                  <button 
+                    onClick={() => {
+                      setEditingId(null);
+                      setAddingNew(`custom-${customSection.id}`);
+                      setFormData({ title: '', content: '', sectionId: customSection.id });
+                    }} 
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"
+                  >
+                    <Plus size={18} /> Add Item
+                  </button>
+                )}
+              </div>
+
+              {isAdmin && addingNew?.startsWith(`custom-${customSection.id}`) && (
+                <EditForm title={editingId ? 'Edit Item' : 'Add Item to ' + customSection.name} onSave={saveCustomItem}>
+                  <input 
+                    className={`col-span-2 ${inputCls}`} 
+                    placeholder="Title" 
+                    value={formData.title || ''} 
+                    onChange={e => handleFormDataChange('title', e.target.value)} 
+                  />
+                  <textarea 
+                    className={`col-span-2 ${inputCls} h-32`} 
+                    placeholder="Content" 
+                    value={formData.content || ''} 
+                    onChange={e => handleFormDataChange('content', e.target.value)} 
+                  />
+                </EditForm>
+              )}
+
+              {(customSectionItems[customSection.id] || []).length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-slate-400 text-lg">No items yet.{isAdmin && ' Click "Add Item" to get started!'}</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {(customSectionItems[customSection.id] || []).map((item) => (
+                    <div key={item.id} className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
+                      <div className="flex items-start justify-between mb-3">
+                        <h3 className="font-bold text-lg text-purple-300">{item.title}</h3>
+                        {isAdmin && (
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => startEditCustomItem(customSection.id, item)} 
+                              className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"
+                            >
+                              <Edit3 size={14} /> Edit
+                            </button>
+                            <button 
+                              onClick={() => deleteCustomItem(customSection.id, item.id)} 
+                              className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"
+                            >
+                              <Trash2 size={14} /> Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-300 whitespace-pre-wrap">{item.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        ))}
 
         {/* SETTINGS */}
         {activeTab === 'settings' && isAdmin && (
