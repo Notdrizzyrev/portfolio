@@ -242,7 +242,20 @@ export default function SwordXStaffCommunity() {
         if (notes && Object.keys(notes).length > 0) setSectionNotes(notes);
         if (logs && logs.length > 0) setAdminLogs(logs);
         if (custom && Object.keys(custom).length > 0) setCustomSectionItems(custom);
-        if (secs && secs.length > 0) setSections(secs);
+        
+        // FIX #1: MERGE custom sections with default sections instead of replacing
+        if (secs && secs.length > 0) {
+          setSections(prev => {
+            const defaultIds = ['classes', 'events', 'codes', 'guide'];
+            // Keep default sections from previous state
+            const defaults = prev.filter(s => defaultIds.includes(s.id));
+            // Add custom sections from API, converting section_id to id for consistency
+            const customs = secs
+              .filter(s => s.section_id && !defaultIds.includes(s.section_id))
+              .map(s => ({ ...s, id: s.section_id })); // Use section_id as the identifier
+            return [...defaults, ...customs];
+          });
+        }
       } catch (err) {
         console.error('Load error:', err);
       } finally {
@@ -502,7 +515,7 @@ export default function SwordXStaffCommunity() {
     );
   }, [events, logAction]);
 
-  // GUIDES
+  // GUIDES - WITH IMAGE SUPPORT
   const startEditGuide = useCallback((guide) => {
     setAddingNew(null);
     setEditingId(`guide-${guide.id}`);
@@ -512,7 +525,7 @@ export default function SwordXStaffCommunity() {
   const startAddGuide = useCallback(() => {
     setEditingId(null);
     setAddingNew('guide');
-    setFormData({ title: '', content: '' });
+    setFormData({ title: '', content: '', image: '' });
   }, []);
 
   const saveGuide = useCallback(async () => {
@@ -551,7 +564,7 @@ export default function SwordXStaffCommunity() {
     );
   }, [guides, logAction]);
 
-  // SECTIONS
+  // SECTIONS - FIXED FIX #2 AND FIX #3
   const addSection = useCallback(() => {
     setAddingNewSection(true);
     setSectionFormData({ name: '', visible: true });
@@ -571,8 +584,14 @@ export default function SwordXStaffCommunity() {
     } else {
       const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
       try {
-        await api('/api/sections', { method: 'POST', body: JSON.stringify({ sectionId: newId, name: sectionFormData.name, visible: sectionFormData.visible }) });
-        const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
+        // FIX #2: Use the API response instead of creating local object
+        const created = await api('/api/sections', { method: 'POST', body: JSON.stringify({ sectionId: newId, name: sectionFormData.name, visible: sectionFormData.visible }) });
+        const newSection = { 
+          id: created.section_id || newId, 
+          section_id: created.section_id || newId, 
+          name: created.name, 
+          visible: created.visible 
+        };
         setSections([...sections, newSection]);
         logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
       } catch (err) { showError(err.message); }
@@ -592,14 +611,17 @@ export default function SwordXStaffCommunity() {
     setSectionFormData({ ...section });
   }, []);
 
+  // FIX #3: Fix deleteSection to use correct identifier
   const deleteSection = useCallback((id) => {
     const section = sections.find(s => s.id === id);
+    // For custom sections, use section_id; for defaults, use id
+    const identifier = section?.section_id || section?.id;
     showConfirm(
       'Delete Section',
       `Are you sure you want to delete "${section?.name}" and all its items? This cannot be undone.`,
       async () => {
         try {
-          await api(`/api/sections/${id}`, { method: 'DELETE' });
+          await api(`/api/sections/${identifier}`, { method: 'DELETE' });
           setSections(sections.filter(s => s.id !== id));
           logAction('DELETE', 'SECTION', section?.name, `Deleted section: ${section?.name}`);
         } catch (err) { showError(err.message); }
@@ -812,6 +834,13 @@ export default function SwordXStaffCommunity() {
       </nav>
 
       <main className="relative max-w-7xl mx-auto px-6 py-12">
+        {/* Ensure non-admins can't view hidden sections */}
+        {!isAdmin && activeTab !== 'settings' && !displaySections.find(s => s.id === activeTab) && (
+          <div className="mb-6 p-4 bg-red-900/40 border border-red-600/50 rounded-lg">
+            <p className="text-red-200">This section is not available.</p>
+          </div>
+        )}
+
         {/* CODES */}
         {activeTab === 'codes' && (
           <div className="space-y-6">
@@ -972,7 +1001,7 @@ export default function SwordXStaffCommunity() {
           </div>
         )}
 
-        {/* GUIDES */}
+        {/* GUIDES - WITH IMAGE SUPPORT */}
         {activeTab === 'guide' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center mb-6">
@@ -983,6 +1012,18 @@ export default function SwordXStaffCommunity() {
             {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
               <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
                 <input className={`col-span-2 ${inputCls}`} placeholder="Guide Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    [UPLOAD] Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                </div>
+                {formData.image && formData.image.startsWith('data:') && (
+                  <div className="col-span-2">
+                    <img src={formData.image} alt="preview" className="max-h-40 rounded-lg border border-amber-600/30" />
+                  </div>
+                )}
                 <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
               </EditForm>
             )}
@@ -993,17 +1034,24 @@ export default function SwordXStaffCommunity() {
             ) : (
               <div className="space-y-4">
                 {guides.map((guide) => (
-                  <div key={guide.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl p-6 hover:border-amber-600/50 transition-all">
-                    <div className="flex items-start justify-between mb-3">
-                      <h3 className="font-bold text-lg text-amber-300">{guide.title}</h3>
-                      {isAdmin && (
-                        <div className="flex gap-2">
-                          <button onClick={() => startEditGuide(guide)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
-                          <button onClick={() => deleteGuide(guide.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
-                        </div>
-                      )}
+                  <div key={guide.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    {guide.image && (
+                      <div className="relative h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                        <img src={guide.image} alt={guide.title} className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div className="p-6">
+                      <div className="flex items-start justify-between mb-3">
+                        <h3 className="font-bold text-lg text-amber-300">{guide.title}</h3>
+                        {isAdmin && (
+                          <div className="flex gap-2">
+                            <button onClick={() => startEditGuide(guide)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
+                            <button onClick={() => deleteGuide(guide.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-300 whitespace-pre-wrap">{guide.content}</p>
                     </div>
-                    <p className="text-sm text-slate-300 whitespace-pre-wrap">{guide.content}</p>
                   </div>
                 ))}
               </div>
@@ -1060,14 +1108,14 @@ export default function SwordXStaffCommunity() {
                   <div key={section.id} className="bg-slate-700/30 rounded-lg p-4 flex items-center justify-between">
                     <div className="flex-1">
                       <h4 className="font-semibold text-slate-200">{section.name}</h4>
-                      <p className="text-xs text-slate-400">ID: {section.id}</p>
+                      <p className="text-xs text-slate-400">ID: {section.id || section.section_id}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => toggleSectionVisibility(section.id)} className={`px-3 py-2 rounded text-sm ${section.visible ? 'bg-green-600/40 text-green-300' : 'bg-red-600/40 text-red-300'}`}>
                         {section.visible ? <Eye size={14} /> : <EyeOff size={14} />}
                       </button>
                       <button onClick={() => editSection(section)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm"><Edit3 size={14} /></button>
-                      <button onClick={() => deleteSection(section.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm"><Trash2 size={14} /></button>
+                      <button onClick={() => deleteSection(section.id || section.section_id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm"><Trash2 size={14} /></button>
                     </div>
                   </div>
                 ))}
