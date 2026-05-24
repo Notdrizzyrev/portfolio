@@ -120,15 +120,16 @@ export default function SwordXStaffCommunity() {
     async function load() {
       try {
         setLoading(true);
-        const [c, cl, ev, g, ann, notes, logs, custom] = await Promise.all([
+        const [c, cl, ev, g, ann, notes, logs, custom, secs] = await Promise.all([
           api('/api/codes'),
           api('/api/classes'),
           api('/api/events'),
           api('/api/guides'),
-          api('/api/announcements').catch(() => ({ text: '', color: 'amber' })), // fallback if endpoint doesn't exist
-          api('/api/section-notes').catch(() => ({})), // fallback if endpoint doesn't exist
-          api('/api/logs').catch(() => []), // fallback if endpoint doesn't exist
-          api('/api/custom-items').catch(() => ({})), // fallback if endpoint doesn't exist
+          api('/api/announcements').catch(() => ({ text: '', color: 'amber' })),
+          api('/api/section-notes').catch(() => ({})),
+          api('/api/logs').catch(() => []),
+          api('/api/custom-items').catch(() => ({})),
+          api('/api/sections').catch(() => []), // Load custom sections
         ]);
         setCodes(c);
         setClasses(cl);
@@ -150,6 +151,22 @@ export default function SwordXStaffCommunity() {
         console.log('Note: Loaded custom items from API:', custom);
         if (custom && Object.keys(custom).length > 0) {
           setCustomSectionItems(custom);
+        }
+        console.log('Note: Loaded sections from API:', secs);
+        if (secs && secs.length > 0) {
+          // Combine default sections with custom sections from API
+          const defaultSections = ['classes', 'events', 'codes', 'guide'];
+          const customSections = secs.filter(s => !defaultSections.includes(s.id));
+          const allSections = [
+            ...secs.filter(s => s.id === 'classes'),
+            ...secs.filter(s => s.id === 'events'),
+            ...secs.filter(s => s.id === 'codes'),
+            ...secs.filter(s => s.id === 'guide'),
+            ...customSections
+          ];
+          if (allSections.length > 0) {
+            setSections(allSections);
+          }
         }
       } catch (err) {
         console.error('Note: Failed to load data:', err);
@@ -190,11 +207,6 @@ export default function SwordXStaffCommunity() {
 
   }, []);
 
-  // ── SAVE SECTIONS TO LOCALSTORAGE WHENEVER THEY CHANGE ──────────────────────
-  useEffect(() => {
-    localStorage.setItem('sections', JSON.stringify(sections));
-  }, [sections]);
-
   // ── Scroll edit form into view whenever it opens ───────────────────────────
   useEffect(() => {
     if ((editingId || addingNew) && editFormRef.current) {
@@ -208,7 +220,7 @@ export default function SwordXStaffCommunity() {
   useEffect(() => {
     const pollInterval = setInterval(async () => {
       try {
-        const [c, cl, ev, g, ann, notes, custom] = await Promise.all([
+        const [c, cl, ev, g, ann, notes, custom, secs] = await Promise.all([
           api('/api/codes'),
           api('/api/classes'),
           api('/api/events'),
@@ -216,6 +228,7 @@ export default function SwordXStaffCommunity() {
           api('/api/announcements').catch(() => ({ text: '', color: 'amber' })),
           api('/api/section-notes').catch(() => ({})),
           api('/api/custom-items').catch(() => ({})),
+          api('/api/sections').catch(() => []),
         ]);
 
         // Check if any data changed
@@ -226,8 +239,9 @@ export default function SwordXStaffCommunity() {
         const annChanged = ann?.text !== announcement;
         const notesChanged = JSON.stringify(notes) !== JSON.stringify(sectionNotes);
         const customChanged = JSON.stringify(custom) !== JSON.stringify(customSectionItems);
+        const secChanged = JSON.stringify(secs) !== JSON.stringify(sections);
 
-        if (codesChanged || classesChanged || eventsChanged || guidesChanged || annChanged || notesChanged || customChanged) {
+        if (codesChanged || classesChanged || eventsChanged || guidesChanged || annChanged || notesChanged || customChanged || secChanged) {
           let message = 'Updates available:';
           if (codesChanged) message += ' Codes';
           if (classesChanged) message += ' Classes';
@@ -236,6 +250,7 @@ export default function SwordXStaffCommunity() {
           if (annChanged) message += ' Announcement';
           if (notesChanged) message += ' Notes';
           if (customChanged) message += ' Custom Sections';
+          if (secChanged) message += ' Sections';
           
           setUpdateMessage(message);
           setShowUpdateNotification(true);
@@ -246,7 +261,7 @@ export default function SwordXStaffCommunity() {
     }, 10000); // Poll every 10 seconds
 
     return () => clearInterval(pollInterval);
-  }, [codes, classes, events, guides, announcement, sectionNotes, customSectionItems]);
+  }, [codes, classes, events, guides, announcement, sectionNotes, customSectionItems, sections]);
 
   // ── Memoized callback for form data updates ────────────────────────────────
   const handleFormDataChange = useCallback((key, value) => {
@@ -559,24 +574,40 @@ export default function SwordXStaffCommunity() {
     setSectionFormData({ name: '', visible: true });
   }, []);
 
-  const saveSection = useCallback(() => {
+  const saveSection = useCallback(async () => {
     if (!sectionFormData.name.trim()) {
       alert('Section name cannot be empty');
       return;
     }
 
     if (editingSectionId) {
-      setSections(sections.map(s =>
-        s.id === editingSectionId
-          ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
-          : s
-      ));
-      logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
+      try {
+        await api('/api/sections', { 
+          method: 'POST', 
+          body: JSON.stringify({ sectionId: editingSectionId, name: sectionFormData.name, visible: sectionFormData.visible })
+        });
+        setSections(sections.map(s =>
+          s.id === editingSectionId
+            ? { ...s, name: sectionFormData.name, visible: sectionFormData.visible }
+            : s
+        ));
+        logAction('EDIT', 'SECTION', sectionFormData.name, `Updated section: ${sectionFormData.name}`);
+      } catch (err) {
+        alert('Save failed: ' + err.message);
+      }
     } else {
       const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
-      const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
-      setSections([...sections, newSection]);
-      logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
+      try {
+        await api('/api/sections', { 
+          method: 'POST', 
+          body: JSON.stringify({ sectionId: newId, name: sectionFormData.name, visible: sectionFormData.visible })
+        });
+        const newSection = { id: newId, name: sectionFormData.name, visible: sectionFormData.visible };
+        setSections([...sections, newSection]);
+        logAction('ADD', 'SECTION', sectionFormData.name, `Created section: ${sectionFormData.name}`);
+      } catch (err) {
+        alert('Save failed: ' + err.message);
+      }
     }
 
     cancelSectionEdit();
@@ -594,11 +625,16 @@ export default function SwordXStaffCommunity() {
     setSectionFormData({ ...section });
   }, []);
 
-  const deleteSection = useCallback((id) => {
+  const deleteSection = useCallback(async (id) => {
     const section = sections.find(s => s.id === id);
     if (!confirm(`Delete section "${section?.name}"?`)) return;
-    setSections(sections.filter(s => s.id !== id));
-    logAction('DELETE', 'SECTION', section?.name, `Deleted section: ${section?.name}`);
+    try {
+      await api(`/api/sections/${id}`, { method: 'DELETE' });
+      setSections(sections.filter(s => s.id !== id));
+      logAction('DELETE', 'SECTION', section?.name, `Deleted section: ${section?.name}`);
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    }
   }, [sections, logAction]);
 
   const toggleSectionVisibility = useCallback((id) => {
