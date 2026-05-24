@@ -84,7 +84,8 @@ export default function SwordXStaffCommunity() {
   const [announcement, setAnnouncement] = useState(null);
   const [announcementText, setAnnouncementText] = useState('');
   const [announcementColor, setAnnouncementColor] = useState('amber'); // amber, red, blue, green
-  const [editingAnnouncement, setEditingAnnouncement] = useState(false);
+  const [showUpdateNotification, setShowUpdateNotification] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState('');
 
   // ── Edit form scroll ref (fixes the "edit button does nothing" bug) ─────────
   const editFormRef = useRef(null);
@@ -203,7 +204,7 @@ export default function SwordXStaffCommunity() {
     }
   }, [editingId, addingNew]);
 
-  // ── AUTO-RELOAD PAGE WHEN DATA CHANGES ─────────────────────────────────────
+  // ── CHECK FOR DATA CHANGES (NOTIFY INSTEAD OF AUTO-RELOAD) ───────────────────
   useEffect(() => {
     const pollInterval = setInterval(async () => {
       try {
@@ -227,8 +228,17 @@ export default function SwordXStaffCommunity() {
         const customChanged = JSON.stringify(custom) !== JSON.stringify(customSectionItems);
 
         if (codesChanged || classesChanged || eventsChanged || guidesChanged || annChanged || notesChanged || customChanged) {
-          console.log('Note: Data changed, reloading page for everyone');
-          window.location.reload();
+          let message = 'Updates available:';
+          if (codesChanged) message += ' Codes';
+          if (classesChanged) message += ' Classes';
+          if (eventsChanged) message += ' Events';
+          if (guidesChanged) message += ' Guides';
+          if (annChanged) message += ' Announcement';
+          if (notesChanged) message += ' Notes';
+          if (customChanged) message += ' Custom Sections';
+          
+          setUpdateMessage(message);
+          setShowUpdateNotification(true);
         }
       } catch (err) {
         // Silently fail on poll errors
@@ -845,6 +855,31 @@ export default function SwordXStaffCommunity() {
           </div>
         </div>
       )}
+      
+      {/* Update Notification Popup */}
+      {showUpdateNotification && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 border border-blue-600/50 rounded-xl p-6 max-w-md">
+            <h3 className="font-bold text-lg text-blue-300 mb-3">Updates Available</h3>
+            <p className="text-slate-300 mb-6">{updateMessage}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowUpdateNotification(false)}
+                className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg font-semibold"
+              >
+                Later
+              </button>
+              <button
+                onClick={() => window.location.reload()}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold"
+              >
+                Reload Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <nav className="sticky top-0 z-40 border-b border-amber-900/20 backdrop-blur-sm bg-slate-950/50">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex gap-2 overflow-x-auto">
