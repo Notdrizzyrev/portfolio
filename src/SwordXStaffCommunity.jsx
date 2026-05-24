@@ -148,6 +148,7 @@ export default function SwordXStaffCommunity() {
     classes: 'Learn about our different classes and their abilities',
     events: 'Check out upcoming events and special occasions',
     guide: 'Read our guides to get started',
+    fantomons: 'Collect and discover all the Fantomons',
   });
   const [editingNoteSection, setEditingNoteSection] = useState(null);
   const [announcement, setAnnouncement] = useState(null);
@@ -171,6 +172,7 @@ export default function SwordXStaffCommunity() {
     { id: 'events', name: 'Events', visible: true },
     { id: 'codes', name: 'Codes', visible: true },
     { id: 'guide', name: 'Guide', visible: true },
+    { id: 'fantomons', name: 'Fantomons', visible: true },
   ]);
 
   const [editingId, setEditingId] = useState(null);
@@ -246,7 +248,7 @@ export default function SwordXStaffCommunity() {
         // FIX #1: MERGE custom sections with default sections instead of replacing
         if (secs && secs.length > 0) {
           setSections(prev => {
-            const defaultIds = ['classes', 'events', 'codes', 'guide'];
+            const defaultIds = ['classes', 'events', 'codes', 'guide', 'fantomons'];
             const defaults = prev.filter(s => defaultIds.includes(s.id));
             const customs = secs
               .filter(s => s.section_id && !defaultIds.includes(s.section_id))
@@ -562,7 +564,7 @@ export default function SwordXStaffCommunity() {
     );
   }, [guides, logAction]);
 
-  // CUSTOM SECTION ITEMS - FIX #5: Add custom section support
+  // CUSTOM SECTION ITEMS - WITH IMAGE SUPPORT
   const startEditCustomItem = useCallback((sectionId, item) => {
     setAddingNew(null);
     setEditingId(`custom-${sectionId}-${item.id}`);
@@ -627,7 +629,7 @@ export default function SwordXStaffCommunity() {
     );
   }, [customSectionItems, logAction]);
 
-  // SECTIONS - FIX #2, #3, and #4
+  // SECTIONS
   const addSection = useCallback(() => {
     setAddingNewSection(true);
     setSectionFormData({ name: '', visible: true });
@@ -1137,8 +1139,8 @@ export default function SwordXStaffCommunity() {
           </div>
         )}
 
-        {/* CUSTOM SECTIONS - FIX #5 */}
-        {sections.filter(s => !['classes', 'events', 'codes', 'guide'].includes(s.id)).map(customSection => (
+        {/* CUSTOM SECTIONS - WITH IMAGE SUPPORT */}
+        {sections.filter(s => !['classes', 'events', 'codes', 'guide', 'fantomons'].includes(s.id)).map(customSection => (
           activeTab === customSection.id && (
             <div key={customSection.id} className="space-y-6">
               <div className="flex justify-between items-center mb-6">
@@ -1150,7 +1152,7 @@ export default function SwordXStaffCommunity() {
                     onClick={() => {
                       setEditingId(null);
                       setAddingNew(`custom-${customSection.id}`);
-                      setFormData({ title: '', content: '', sectionId: customSection.id });
+                      setFormData({ title: '', content: '', image: '', sectionId: customSection.id });
                     }} 
                     className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"
                   >
@@ -1167,6 +1169,18 @@ export default function SwordXStaffCommunity() {
                     value={formData.title || ''} 
                     onChange={e => handleFormDataChange('title', e.target.value)} 
                   />
+                  <div className="col-span-2 flex items-center gap-2">
+                    <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                      [UPLOAD] Upload Image
+                      <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                    </label>
+                    {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                  </div>
+                  {formData.image && formData.image.startsWith('data:') && (
+                    <div className="col-span-2">
+                      <img src={formData.image} alt="preview" className="max-h-40 rounded-lg border border-purple-600/30" />
+                    </div>
+                  )}
                   <textarea 
                     className={`col-span-2 ${inputCls} h-32`} 
                     placeholder="Content" 
@@ -1183,19 +1197,117 @@ export default function SwordXStaffCommunity() {
               ) : (
                 <div className="space-y-4">
                   {(customSectionItems[customSection.id] || []).map((item) => (
-                    <div key={item.id} className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
+                    <div key={item.id} className="bg-slate-800/40 border border-slate-700/30 rounded-xl overflow-hidden">
+                      {item.image && (
+                        <div className="relative h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                          <img src={item.image} alt={item.title} className="w-full h-full object-cover" />
+                        </div>
+                      )}
+                      <div className="p-6">
+                        <div className="flex items-start justify-between mb-3">
+                          <h3 className="font-bold text-lg text-purple-300">{item.title}</h3>
+                          {isAdmin && (
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => startEditCustomItem(customSection.id, item)} 
+                                className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"
+                              >
+                                <Edit3 size={14} /> Edit
+                              </button>
+                              <button 
+                                onClick={() => deleteCustomItem(customSection.id, item.id)} 
+                                className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"
+                              >
+                                <Trash2 size={14} /> Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-sm text-slate-300 whitespace-pre-wrap">{item.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        ))}
+
+        {/* FANTOMONS SECTION */}
+        {activeTab === 'fantomons' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-pink-300 via-purple-400 to-indigo-500 bg-clip-text text-transparent">Fantomons</h2>
+              {isAdmin && (
+                <button 
+                  onClick={() => {
+                    setEditingId(null);
+                    setAddingNew('custom-fantomons');
+                    setFormData({ title: '', content: '', image: '', sectionId: 'fantomons' });
+                  }} 
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"
+                >
+                  <Plus size={18} /> Add Fantomon
+                </button>
+              )}
+            </div>
+            <SectionNote sectionId="fantomons" isAdmin={isAdmin} editingNoteSection={editingNoteSection} setEditingNoteSection={setEditingNoteSection} sectionNotes={sectionNotes} setSectionNotes={setSectionNotes} inputCls={inputCls} saveCodesNote={saveCodesNote} />
+
+            {isAdmin && addingNew?.startsWith('custom-fantomons') && (
+              <EditForm title={editingId ? 'Edit Fantomon' : 'Add New Fantomon'} onSave={saveCustomItem}>
+                <input 
+                  className={`col-span-2 ${inputCls}`} 
+                  placeholder="Fantomon Name" 
+                  value={formData.title || ''} 
+                  onChange={e => handleFormDataChange('title', e.target.value)} 
+                />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    [UPLOAD] Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                </div>
+                {formData.image && formData.image.startsWith('data:') && (
+                  <div className="col-span-2">
+                    <img src={formData.image} alt="preview" className="max-h-40 rounded-lg border border-purple-600/30" />
+                  </div>
+                )}
+                <textarea 
+                  className={`col-span-2 ${inputCls} h-32`} 
+                  placeholder="Description & Details" 
+                  value={formData.content || ''} 
+                  onChange={e => handleFormDataChange('content', e.target.value)} 
+                />
+              </EditForm>
+            )}
+
+            {(customSectionItems['fantomons'] || []).length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400 text-lg">No Fantomons yet.{isAdmin && ' Click "Add Fantomon" to get started!'}</p>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {(customSectionItems['fantomons'] || []).map((item) => (
+                  <div key={item.id} className="bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-purple-900/30 rounded-xl overflow-hidden hover:border-purple-600/50 transition-all">
+                    {item.image && (
+                      <div className="relative h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                        <img src={item.image} alt={item.title} className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div className="p-6">
                       <div className="flex items-start justify-between mb-3">
-                        <h3 className="font-bold text-lg text-purple-300">{item.title}</h3>
+                        <h3 className="font-bold text-lg text-pink-300">{item.title}</h3>
                         {isAdmin && (
                           <div className="flex gap-2">
                             <button 
-                              onClick={() => startEditCustomItem(customSection.id, item)} 
+                              onClick={() => startEditCustomItem('fantomons', item)} 
                               className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"
                             >
                               <Edit3 size={14} /> Edit
                             </button>
                             <button 
-                              onClick={() => deleteCustomItem(customSection.id, item.id)} 
+                              onClick={() => deleteCustomItem('fantomons', item.id)} 
                               className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"
                             >
                               <Trash2 size={14} /> Delete
@@ -1205,12 +1317,12 @@ export default function SwordXStaffCommunity() {
                       </div>
                       <p className="text-sm text-slate-300 whitespace-pre-wrap">{item.content}</p>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* SETTINGS - IMPROVED DESIGN */}
         {activeTab === 'settings' && isAdmin && (
@@ -1366,20 +1478,24 @@ export default function SwordXStaffCommunity() {
                         >
                           {section.visible ? <Eye size={16} /> : <EyeOff size={16} />}
                         </button>
-                        <button 
-                          onClick={() => editSection(section)} 
-                          className="p-3 rounded-lg bg-blue-600/40 hover:bg-blue-600/60 text-blue-400 border border-blue-600/50 transition-all transform hover:scale-110"
-                          title="Edit section"
-                        >
-                          <Edit3 size={16} />
-                        </button>
-                        <button 
-                          onClick={() => deleteSection(section.id || section.section_id)} 
-                          className="p-3 rounded-lg bg-red-600/40 hover:bg-red-600/60 text-red-400 border border-red-600/50 transition-all transform hover:scale-110"
-                          title="Delete section"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        {!['classes', 'events', 'codes', 'guide', 'fantomons'].includes(section.id) && (
+                          <>
+                            <button 
+                              onClick={() => editSection(section)} 
+                              className="p-3 rounded-lg bg-blue-600/40 hover:bg-blue-600/60 text-blue-400 border border-blue-600/50 transition-all transform hover:scale-110"
+                              title="Edit section"
+                            >
+                              <Edit3 size={16} />
+                            </button>
+                            <button 
+                              onClick={() => deleteSection(section.id || section.section_id)} 
+                              className="p-3 rounded-lg bg-red-600/40 hover:bg-red-600/60 text-red-400 border border-red-600/50 transition-all transform hover:scale-110"
+                              title="Delete section"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
