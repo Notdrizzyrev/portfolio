@@ -90,8 +90,6 @@ export default function SwordXStaffCommunity() {
   const [announcement, setAnnouncement] = useState(null);
   const [announcementText, setAnnouncementText] = useState('');
   const [announcementColor, setAnnouncementColor] = useState('amber');
-  const [showUpdateNotification, setShowUpdateNotification] = useState(false);
-  const [updateMessage, setUpdateMessage] = useState('');
   const [editingAnnouncement, setEditingAnnouncement] = useState(false);
 
   const editFormRef = useRef(null);
@@ -118,6 +116,38 @@ export default function SwordXStaffCommunity() {
   const ADMIN_PASSWORD = 'SxSSwordXStaffAdminYoutubeKingAuraFarmingWebsiteWeOwnOnlyAdminsDONTLETPEOPLEUSETHISATALLLEAKTHISUWILLGETPERMBANND';
   const MAX_ATTEMPTS = 3;
   const LOCKOUT_DURATION = 300;
+
+  // Load lockout status from sessionStorage on mount
+  useEffect(() => {
+    const storedLockout = sessionStorage.getItem('lockoutTime');
+    const storedAttempts = sessionStorage.getItem('failedAttempts');
+    if (storedLockout) {
+      const remainingTime = parseInt(storedLockout) - Date.now();
+      if (remainingTime > 0) {
+        setLockoutTime(Math.ceil(remainingTime / 1000));
+        setFailedAttempts(parseInt(storedAttempts) || 0);
+      }
+    }
+  }, []);
+
+  // Manage lockout countdown
+  useEffect(() => {
+    if (lockoutTime > 0) {
+      const interval = setInterval(() => {
+        setLockoutTime(prev => {
+          const newTime = prev - 1;
+          if (newTime <= 0) {
+            clearInterval(interval);
+            sessionStorage.removeItem('lockoutTime');
+            sessionStorage.removeItem('failedAttempts');
+            return 0;
+          }
+          return newTime;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [lockoutTime]);
 
   useEffect(() => {
     async function load() {
@@ -198,21 +228,29 @@ export default function SwordXStaffCommunity() {
   }, [adminLogs.length]);
 
   const handleLogin = useCallback(() => {
-    if (lockoutTime > 0) { alert(`Try again in ${lockoutTime}s`); return; }
+    if (lockoutTime > 0) { 
+      alert(`Try again in ${lockoutTime}s`); 
+      return; 
+    }
     if (password === ADMIN_PASSWORD) {
       setIsAdmin(true);
       localStorage.setItem('isAdmin', 'true');
-      setShowLogin(false); setPassword('');
-      setFailedAttempts(0); setLockoutTime(0);
+      setShowLogin(false); 
+      setPassword('');
+      setFailedAttempts(0); 
+      setLockoutTime(0);
+      sessionStorage.removeItem('lockoutTime');
+      sessionStorage.removeItem('failedAttempts');
     } else {
       const n = failedAttempts + 1;
-      setFailedAttempts(n); setPassword('');
+      setFailedAttempts(n); 
+      setPassword('');
       if (n >= MAX_ATTEMPTS) {
+        const lockoutEndTime = Date.now() + (LOCKOUT_DURATION * 1000);
         setLockoutTime(LOCKOUT_DURATION);
+        sessionStorage.setItem('lockoutTime', lockoutEndTime);
+        sessionStorage.setItem('failedAttempts', n);
         alert(`LOCKED OUT! Try again in ${LOCKOUT_DURATION} seconds.`);
-        const interval = setInterval(() => {
-          setLockoutTime(prev => { if (prev <= 1) { clearInterval(interval); return 0; } return prev - 1; });
-        }, 1000);
       } else {
         alert(`Incorrect. Attempts remaining: ${MAX_ATTEMPTS - n}`);
       }
@@ -223,17 +261,26 @@ export default function SwordXStaffCommunity() {
     setIsAdmin(false);
     localStorage.removeItem('isAdmin');
     setPassword('');
-    setEditingId(null); setAddingNew(null); setFormData({});
+    setEditingId(null); 
+    setAddingNew(null); 
+    setFormData({});
   }, []);
 
-  const cancelEdit = useCallback(() => { setEditingId(null); setAddingNew(null); setFormData({}); }, []);
+  const cancelEdit = useCallback(() => { 
+    setEditingId(null); 
+    setAddingNew(null); 
+    setFormData({}); 
+  }, []);
+  
   const toggleExpanded = useCallback((id) => setExpandedItems(prev => ({ ...prev, [id]: !prev[id] })), []);
+  
   const copyToClipboard = useCallback((code) => {
     navigator.clipboard.writeText(code);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2000);
   }, []);
 
+  // CODES
   const startEditCode = useCallback((code) => {
     setAddingNew(null);
     setEditingId(`code-${code.id}`);
@@ -274,6 +321,7 @@ export default function SwordXStaffCommunity() {
     } catch (err) { alert('Delete failed: ' + err.message); }
   }, [codes, logAction]);
 
+  // CLASSES
   const startEditClass = useCallback((cls) => {
     setAddingNew(null);
     setEditingId(`class-${cls.id}`);
@@ -314,6 +362,7 @@ export default function SwordXStaffCommunity() {
     } catch (err) { alert('Delete failed: ' + err.message); }
   }, [classes, logAction]);
 
+  // EVENTS
   const startEditEvent = useCallback((event) => {
     setAddingNew(null);
     setEditingId(`event-${event.id}`);
@@ -354,6 +403,7 @@ export default function SwordXStaffCommunity() {
     } catch (err) { alert('Delete failed: ' + err.message); }
   }, [events, logAction]);
 
+  // GUIDES
   const startEditGuide = useCallback((guide) => {
     setAddingNew(null);
     setEditingId(`guide-${guide.id}`);
@@ -394,61 +444,7 @@ export default function SwordXStaffCommunity() {
     } catch (err) { alert('Delete failed: ' + err.message); }
   }, [guides, logAction]);
 
-  const startAddCustomItem = useCallback((sectionId) => {
-    setEditingId(null);
-    setAddingNew(`custom-${sectionId}`);
-    setFormData({ title: '', content: '' });
-  }, []);
-
-  const startEditCustomItem = useCallback((sectionId, itemId) => {
-    const items = customSectionItems[sectionId] || [];
-    const item = items.find(i => i.id === itemId);
-    if (!item) return;
-    setAddingNew(null);
-    setEditingId(`custom-item-${sectionId}-${itemId}`);
-    setFormData({ ...item });
-  }, [customSectionItems]);
-
-  const saveCustomItem = useCallback(async () => {
-    if (editingId?.startsWith('custom-item-')) {
-      const [, sectionId, itemId] = editingId.match(/custom-item-(.+)-(\d+)/);
-      const items = customSectionItems[sectionId] || [];
-      const updatedItem = { ...formData, id: parseInt(itemId) };
-      try {
-        await api('/api/custom-items', { method: 'POST', body: JSON.stringify({ sectionId, item: updatedItem }) });
-        const updated = items.map(i => i.id === parseInt(itemId) ? updatedItem : i);
-        const newItems = { ...customSectionItems, [sectionId]: updated };
-        setCustomSectionItems(newItems);
-        logAction('EDIT', 'CUSTOM_ITEM', formData.title, `Updated item in ${sectionId}`);
-      } catch (err) { alert('Save failed: ' + err.message); }
-    } else if (addingNew?.startsWith('custom-')) {
-      const sectionId = addingNew.replace('custom-', '');
-      const items = customSectionItems[sectionId] || [];
-      const newId = Math.max(...items.map(i => i.id || 0), 0) + 1;
-      const newItem = { ...formData, id: newId };
-      try {
-        await api('/api/custom-items', { method: 'POST', body: JSON.stringify({ sectionId, item: newItem }) });
-        const newItems = { ...customSectionItems, [sectionId]: [...items, newItem] };
-        setCustomSectionItems(newItems);
-        logAction('ADD', 'CUSTOM_ITEM', formData.title, `Added item to ${sectionId}`);
-      } catch (err) { alert('Save failed: ' + err.message); }
-    }
-    cancelEdit();
-  }, [editingId, addingNew, formData, customSectionItems, cancelEdit, logAction]);
-
-  const deleteCustomItem = useCallback(async (sectionId, itemId) => {
-    const items = customSectionItems[sectionId] || [];
-    const item = items.find(i => i.id === itemId);
-    if (!confirm(`Delete item "${item?.title}"?`)) return;
-    try {
-      await api(`/api/custom-items/${sectionId}/${itemId}`, { method: 'DELETE' });
-      const updated = items.filter(i => i.id !== itemId);
-      const newItems = updated.length === 0 ? { ...customSectionItems, [sectionId]: undefined } : { ...customSectionItems, [sectionId]: updated };
-      setCustomSectionItems(newItems);
-      logAction('DELETE', 'CUSTOM_ITEM', item?.title, `Deleted item from ${sectionId}`);
-    } catch (err) { alert('Delete failed: ' + err.message); }
-  }, [customSectionItems, logAction]);
-
+  // SECTIONS
   const addSection = useCallback(() => {
     setAddingNewSection(true);
     setSectionFormData({ name: '', visible: true });
@@ -548,6 +544,7 @@ export default function SwordXStaffCommunity() {
       localStorage.removeItem('announcement');
       setAnnouncement(null);
       setAnnouncementText('');
+      setEditingAnnouncement(false);
       logAction('DELETE', 'ANNOUNCEMENT', 'Announcement', 'Deleted announcement');
     }
   }, [logAction]);
@@ -636,8 +633,8 @@ export default function SwordXStaffCommunity() {
               {adminLogs.length === 0 ? (<p className="text-slate-400">No admin actions yet.</p>) : (
                 <div className="bg-slate-800/40 border border-blue-600/30 rounded-lg overflow-hidden max-h-96 overflow-y-auto">
                   {adminLogs.map((log) => (<div key={log.id} className="border-b border-blue-600/20 p-4 flex justify-between items-start hover:bg-slate-700/30 transition-all">
-                    <div className="flex-1"><div className="flex items-center gap-3 mb-2"><span className={`px-2 py-1 rounded text-xs font-bold ${log.actionType === 'ADD' ? 'bg-green-600/40 text-green-300' : log.actionType === 'EDIT' ? 'bg-blue-600/40 text-blue-300' : 'bg-red-600/40 text-red-300'}`}>{log.actionType}</span><span className="px-2 py-1 bg-amber-600/30 text-amber-300 rounded text-xs font-bold">{log.category}</span><span className="text-slate-300 font-semibold">{log.itemName}</span></div><p className="text-slate-400 text-sm">{log.details}</p></div>
-                    <p className="text-slate-500 text-xs ml-4 whitespace-nowrap">{log.time}</p>
+                    <div className="flex-1"><div className="flex items-center gap-3 mb-2"><span className={`px-2 py-1 rounded text-xs font-bold ${log.action_type === 'ADD' ? 'bg-green-600/40 text-green-300' : log.action_type === 'EDIT' ? 'bg-blue-600/40 text-blue-300' : 'bg-red-600/40 text-red-300'}`}>{log.action_type}</span><span className="px-2 py-1 bg-amber-600/30 text-amber-300 rounded text-xs font-bold">{log.category}</span><span className="text-slate-300 font-semibold">{log.item_name}</span></div><p className="text-slate-400 text-sm">{log.details}</p></div>
+                    <p className="text-slate-500 text-xs ml-4 whitespace-nowrap">{new Date(log.timestamp).toLocaleTimeString()}</p>
                   </div>))}
                 </div>
               )}
@@ -665,16 +662,224 @@ export default function SwordXStaffCommunity() {
       </nav>
 
       <main className="relative max-w-7xl mx-auto px-6 py-12">
-        {activeTab === 'classes' && (<div className="space-y-6"><div className="flex justify-between items-center mb-6"><h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent">Classes</h2>{isAdmin && (<button onClick={startAddClass} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"><Plus size={18} /> Add</button>)}</div><SectionNote sectionId="classes" isAdmin={isAdmin} editingNoteSection={editingNoteSection} setEditingNoteSection={setEditingNoteSection} sectionNotes={sectionNotes} setSectionNotes={setSectionNotes} inputCls={inputCls} saveCodesNote={saveCodesNote} />{isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (<EditForm title={editingId ? 'Edit Class' : 'Add New Class'} onSave={saveClass}><input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => handleFormDataChange('name', e.target.value)} /><input className={inputCls} placeholder="Role" value={formData.role || ''} onChange={e => handleFormDataChange('role', e.target.value)} /><input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} /><div className="col-span-2 flex items-center gap-2"><label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">[UPLOAD] Upload Image<input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" /></label>{formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}</div><textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} /><textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} /></EditForm>)}{classes.length === 0 ? (<div className="text-center py-12"><p className="text-slate-400 text-lg">No classes yet.{isAdmin && ' Click "Add" to get started!'}</p></div>) : (<div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">{classes.map((cls) => (<div key={cls.id} onClick={() => toggleExpanded(`class-${cls.id}`)} className="cursor-pointer bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all"><div className="relative h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">{cls.image && <img src={cls.image} alt={cls.name} className="w-full h-full object-cover" />}<div className="absolute top-3 right-3 px-3 py-1 bg-blue-600/80 rounded-full text-xs font-bold">{cls.role}</div></div><div className="p-5"><div className="flex items-start justify-between mb-3"><h3 className="font-bold text-lg text-amber-300">{cls.name}</h3><ChevronDown size={20} className={`transition-transform ${expandedItems[`class-${cls.id}`] ? 'rotate-180' : ''}`} /></div><p className="text-sm text-slate-300 mb-3">{cls.description}</p>{expandedItems[`class-${cls.id}`] && (<div className="border-t border-amber-900/30 pt-4 mt-4"><p className="text-sm text-slate-200 mb-4">{cls.details}</p>{isAdmin && (<div className="flex gap-2"><button onClick={e => { e.stopPropagation(); startEditClass(cls); }} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1"><Edit3 size={14} /> Edit</button><button onClick={e => { e.stopPropagation(); deleteClass(cls.id); }} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1"><Trash2 size={14} /> Delete</button></div>)}</div>)}</div></div>))}</div>)}</div>)}
+        {/* CODES */}
+        {activeTab === 'codes' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent">Codes</h2>
+              {isAdmin && (<button onClick={startAddCode} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"><Plus size={18} /> Add</button>)}
+            </div>
+            <SectionNote sectionId="codes" isAdmin={isAdmin} editingNoteSection={editingNoteSection} setEditingNoteSection={setEditingNoteSection} sectionNotes={sectionNotes} setSectionNotes={setSectionNotes} inputCls={inputCls} saveCodesNote={saveCodesNote} />
+            {isAdmin && (addingNew === 'code' || editingId?.startsWith('code-')) && (
+              <EditForm title={editingId ? 'Edit Code' : 'Add New Code'} onSave={saveCode}>
+                <input className={`col-span-2 ${inputCls}`} placeholder="Code" value={formData.code || ''} onChange={e => handleFormDataChange('code', e.target.value)} />
+                <input className={inputCls} placeholder="Reward" value={formData.reward || ''} onChange={e => handleFormDataChange('reward', e.target.value)} />
+                <input className={inputCls} placeholder="Location" value={formData.location || ''} onChange={e => handleFormDataChange('location', e.target.value)} />
+              </EditForm>
+            )}
+            {codes.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400 text-lg">No codes yet.{isAdmin && ' Click "Add" to get started!'}</p>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                {codes.map((code) => (
+                  <div key={code.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl p-4 hover:border-amber-600/50 transition-all">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <h3 className="font-bold text-lg text-amber-300 font-mono">{code.code}</h3>
+                        <p className="text-sm text-slate-300 mt-1">{code.reward}</p>
+                        <p className="text-xs text-slate-400 mt-1">{code.location}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => copyToClipboard(code.code)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1">
+                          {copiedCode === code.code ? <Check size={14} /> : <Copy size={14} />}
+                        </button>
+                        {isAdmin && (
+                          <>
+                            <button onClick={() => startEditCode(code)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
+                            <button onClick={() => deleteCode(code.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
+        {/* CLASSES */}
+        {activeTab === 'classes' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent">Classes</h2>
+              {isAdmin && (<button onClick={startAddClass} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"><Plus size={18} /> Add</button>)}
+            </div>
+            <SectionNote sectionId="classes" isAdmin={isAdmin} editingNoteSection={editingNoteSection} setEditingNoteSection={setEditingNoteSection} sectionNotes={sectionNotes} setSectionNotes={setSectionNotes} inputCls={inputCls} saveCodesNote={saveCodesNote} />
+            {isAdmin && (addingNew === 'class' || editingId?.startsWith('class-')) && (
+              <EditForm title={editingId ? 'Edit Class' : 'Add New Class'} onSave={saveClass}>
+                <input className={`col-span-2 ${inputCls}`} placeholder="Class Name" value={formData.name || ''} onChange={e => handleFormDataChange('name', e.target.value)} />
+                <input className={inputCls} placeholder="Role" value={formData.role || ''} onChange={e => handleFormDataChange('role', e.target.value)} />
+                <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <div className="col-span-2 flex items-center gap-2">
+                  <label className="flex-1 px-4 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded-lg font-semibold text-sm cursor-pointer border border-blue-600/50 flex items-center justify-center gap-2">
+                    [UPLOAD] Upload Image
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                  {formData.image && formData.image.startsWith('data:') && <span className="text-green-400 text-sm">[OK] Image selected</span>}
+                </div>
+                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
+              </EditForm>
+            )}
+            {classes.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400 text-lg">No classes yet.{isAdmin && ' Click "Add" to get started!'}</p>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {classes.map((cls) => (
+                  <div key={cls.id} onClick={() => toggleExpanded(`class-${cls.id}`)} className="cursor-pointer bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    <div className="relative h-48 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                      {cls.image && <img src={cls.image} alt={cls.name} className="w-full h-full object-cover" />}
+                      <div className="absolute top-3 right-3 px-3 py-1 bg-blue-600/80 rounded-full text-xs font-bold">{cls.role}</div>
+                    </div>
+                    <div className="p-5">
+                      <div className="flex items-start justify-between mb-3">
+                        <h3 className="font-bold text-lg text-amber-300">{cls.name}</h3>
+                        <ChevronDown size={20} className={`transition-transform ${expandedItems[`class-${cls.id}`] ? 'rotate-180' : ''}`} />
+                      </div>
+                      <p className="text-sm text-slate-300 mb-3">{cls.description}</p>
+                      {expandedItems[`class-${cls.id}`] && (
+                        <div className="border-t border-amber-900/30 pt-4 mt-4">
+                          <p className="text-sm text-slate-200 mb-4">{cls.details}</p>
+                          {isAdmin && (
+                            <div className="flex gap-2">
+                              <button onClick={e => { e.stopPropagation(); startEditClass(cls); }} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1"><Edit3 size={14} /> Edit</button>
+                              <button onClick={e => { e.stopPropagation(); deleteClass(cls.id); }} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1"><Trash2 size={14} /> Delete</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* EVENTS */}
+        {activeTab === 'events' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent">Events</h2>
+              {isAdmin && (<button onClick={startAddEvent} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"><Plus size={18} /> Add</button>)}
+            </div>
+            <SectionNote sectionId="events" isAdmin={isAdmin} editingNoteSection={editingNoteSection} setEditingNoteSection={setEditingNoteSection} sectionNotes={sectionNotes} setSectionNotes={setSectionNotes} inputCls={inputCls} saveCodesNote={saveCodesNote} />
+            {isAdmin && (addingNew === 'event' || editingId?.startsWith('event-')) && (
+              <EditForm title={editingId ? 'Edit Event' : 'Add New Event'} onSave={saveEvent}>
+                <input className={`col-span-2 ${inputCls}`} placeholder="Event Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <input className={inputCls} placeholder="Status" value={formData.status || 'UPCOMING'} onChange={e => handleFormDataChange('status', e.target.value)} />
+                <input className={inputCls} placeholder="Image URL" value={formData.image || ''} onChange={e => handleFormDataChange('image', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-20`} placeholder="Description" value={formData.description || ''} onChange={e => handleFormDataChange('description', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-24`} placeholder="Details" value={formData.details || ''} onChange={e => handleFormDataChange('details', e.target.value)} />
+              </EditForm>
+            )}
+            {events.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400 text-lg">No events yet.{isAdmin && ' Click "Add" to get started!'}</p>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-5">
+                {events.map((event) => (
+                  <div key={event.id} onClick={() => toggleExpanded(`event-${event.id}`)} className="cursor-pointer bg-gradient-to-br from-slate-800/40 to-slate-800/20 border border-amber-900/30 rounded-xl overflow-hidden hover:border-amber-600/50 transition-all">
+                    <div className="relative h-40 bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden">
+                      {event.image && <img src={event.image} alt={event.title} className="w-full h-full object-cover" />}
+                      <div className="absolute top-3 right-3 px-3 py-1 bg-blue-600/80 rounded-full text-xs font-bold">{event.status}</div>
+                    </div>
+                    <div className="p-5">
+                      <h3 className="font-bold text-lg text-amber-300 mb-2">{event.title}</h3>
+                      <p className="text-sm text-slate-300 mb-3">{event.description}</p>
+                      {expandedItems[`event-${event.id}`] && (
+                        <div className="border-t border-amber-900/30 pt-4 mt-4">
+                          <p className="text-sm text-slate-200 mb-4">{event.details}</p>
+                          {isAdmin && (
+                            <div className="flex gap-2">
+                              <button onClick={e => { e.stopPropagation(); startEditEvent(event); }} className="flex-1 px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center justify-center gap-1"><Edit3 size={14} /> Edit</button>
+                              <button onClick={e => { e.stopPropagation(); deleteEvent(event.id); }} className="flex-1 px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center justify-center gap-1"><Trash2 size={14} /> Delete</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* GUIDES */}
+        {activeTab === 'guide' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-amber-300 to-orange-500 bg-clip-text text-transparent">Guides</h2>
+              {isAdmin && (<button onClick={startAddGuide} className="flex items-center gap-2 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg transition-all"><Plus size={18} /> Add</button>)}
+            </div>
+            <SectionNote sectionId="guide" isAdmin={isAdmin} editingNoteSection={editingNoteSection} setEditingNoteSection={setEditingNoteSection} sectionNotes={sectionNotes} setSectionNotes={setSectionNotes} inputCls={inputCls} saveCodesNote={saveCodesNote} />
+            {isAdmin && (addingNew === 'guide' || editingId?.startsWith('guide-')) && (
+              <EditForm title={editingId ? 'Edit Guide' : 'Add New Guide'} onSave={saveGuide}>
+                <input className={`col-span-2 ${inputCls}`} placeholder="Guide Title" value={formData.title || ''} onChange={e => handleFormDataChange('title', e.target.value)} />
+                <textarea className={`col-span-2 ${inputCls} h-32`} placeholder="Content" value={formData.content || ''} onChange={e => handleFormDataChange('content', e.target.value)} />
+              </EditForm>
+            )}
+            {guides.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-slate-400 text-lg">No guides yet.{isAdmin && ' Click "Add" to get started!'}</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {guides.map((guide) => (
+                  <div key={guide.id} className="bg-slate-800/40 border border-amber-900/30 rounded-xl p-6 hover:border-amber-600/50 transition-all">
+                    <div className="flex items-start justify-between mb-3">
+                      <h3 className="font-bold text-lg text-amber-300">{guide.title}</h3>
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <button onClick={() => startEditGuide(guide)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm flex items-center gap-1"><Edit3 size={14} /> Edit</button>
+                          <button onClick={() => deleteGuide(guide.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm flex items-center gap-1"><Trash2 size={14} /> Delete</button>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-sm text-slate-300 whitespace-pre-wrap">{guide.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SETTINGS */}
         {activeTab === 'settings' && isAdmin && (
           <div className="space-y-6">
             <h2 className="text-3xl font-black bg-gradient-to-r from-purple-300 to-pink-500 bg-clip-text text-transparent">Admin Settings</h2>
+
+            {/* Announcements */}
             <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
               <h3 className="font-bold text-lg text-slate-300 mb-4">Announcements</h3>
               {editingAnnouncement ? (
                 <div className="space-y-4 bg-slate-700/30 p-4 rounded-lg">
                   <textarea className={`${inputCls} h-20`} placeholder='e.g., "Check the new YouTube video!"' value={announcementText} onChange={(e) => setAnnouncementText(e.target.value)} autoFocus />
+                  <div className="flex gap-2">
+                    <select value={announcementColor} onChange={(e) => setAnnouncementColor(e.target.value)} className={`${inputCls} flex-1`}>
+                      <option value="amber">Amber</option>
+                      <option value="red">Red</option>
+                      <option value="blue">Blue</option>
+                      <option value="green">Green</option>
+                    </select>
+                  </div>
                   <div className="flex gap-2">
                     <button onClick={saveAnnouncement} className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold flex items-center justify-center gap-2 text-white"><Save size={16} /> Save</button>
                     <button onClick={() => { setEditingAnnouncement(false); setAnnouncementText(announcement || ''); }} className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white">Cancel</button>
@@ -684,7 +889,10 @@ export default function SwordXStaffCommunity() {
                 <div className="bg-slate-700/30 rounded-lg p-4">
                   <p className="text-slate-300 mb-3 font-semibold">Current:</p>
                   <p className="text-slate-200 mb-4">{announcement}</p>
-                  <button onClick={() => { setEditingAnnouncement(true); setAnnouncementText(announcement); }} className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold flex items-center gap-2 text-amber-300"><Edit3 size={14} /> Edit</button>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setEditingAnnouncement(true); setAnnouncementText(announcement); }} className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold flex items-center gap-2 text-amber-300"><Edit3 size={14} /> Edit</button>
+                    <button onClick={deleteAnnouncement} className="px-4 py-2 bg-red-600/40 hover:bg-red-600/60 rounded-lg text-sm font-semibold flex items-center gap-2 text-red-300"><Trash2 size={14} /> Delete</button>
+                  </div>
                 </div>
               ) : (
                 <div className="bg-slate-700/30 rounded-lg p-4 text-center">
@@ -692,6 +900,38 @@ export default function SwordXStaffCommunity() {
                   <button onClick={() => setEditingAnnouncement(true)} className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold text-amber-300">Create Announcement</button>
                 </div>
               )}
+            </div>
+
+            {/* Manage Sections */}
+            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
+              <h3 className="font-bold text-lg text-slate-300 mb-4">Manage Sections</h3>
+              <div className="space-y-3 mb-4">
+                {sections.map((section) => (
+                  <div key={section.id} className="bg-slate-700/30 rounded-lg p-4 flex items-center justify-between">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-slate-200">{section.name}</h4>
+                      <p className="text-xs text-slate-400">ID: {section.id}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => toggleSectionVisibility(section.id)} className={`px-3 py-2 rounded text-sm ${section.visible ? 'bg-green-600/40 text-green-300' : 'bg-red-600/40 text-red-300'}`}>
+                        {section.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                      <button onClick={() => editSection(section)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm"><Edit3 size={14} /></button>
+                      <button onClick={() => deleteSection(section.id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm"><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {(editingSectionId || addingNewSection) && (
+                <div className="bg-slate-600/30 rounded-lg p-4 space-y-3">
+                  <input className={inputCls} placeholder="Section Name" value={sectionFormData.name || ''} onChange={e => handleSectionFormChange('name', e.target.value)} />
+                  <div className="flex gap-2">
+                    <button onClick={saveSection} className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold text-sm flex items-center justify-center gap-2"><Save size={14} /> Save</button>
+                    <button onClick={cancelSectionEdit} className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">Cancel</button>
+                  </div>
+                </div>
+              )}
+              <button onClick={addSection} className="w-full mt-4 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg font-semibold text-sm flex items-center justify-center gap-2"><Plus size={16} /> Add New Section</button>
             </div>
           </div>
         )}
