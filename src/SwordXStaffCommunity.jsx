@@ -247,12 +247,10 @@ export default function SwordXStaffCommunity() {
         if (secs && secs.length > 0) {
           setSections(prev => {
             const defaultIds = ['classes', 'events', 'codes', 'guide'];
-            // Keep default sections from previous state
             const defaults = prev.filter(s => defaultIds.includes(s.id));
-            // Add custom sections from API, converting section_id to id for consistency
             const customs = secs
               .filter(s => s.section_id && !defaultIds.includes(s.section_id))
-              .map(s => ({ ...s, id: s.section_id, visible: s.visible !== false })); // Ensure visible property
+              .map(s => ({ ...s, id: s.section_id, visible: s.visible !== false }));
             return [...defaults, ...customs];
           });
         }
@@ -576,7 +574,6 @@ export default function SwordXStaffCommunity() {
     try {
       const sectionId = formData.sectionId;
       if (editingId?.startsWith('custom-')) {
-        // Update existing
         const updatedItems = (customSectionItems[sectionId] || []).map(i =>
           i.id === formData.id ? formData : i
         );
@@ -588,7 +585,6 @@ export default function SwordXStaffCommunity() {
         });
         logAction('EDIT', 'CUSTOM_ITEM', formData.title, `Updated item in ${sectionId}`);
       } else {
-        // Create new
         const newItem = { ...formData, id: Date.now() };
         const updatedItems = [...(customSectionItems[sectionId] || []), newItem];
         setCustomSectionItems({ ...customSectionItems, [sectionId]: updatedItems });
@@ -651,7 +647,6 @@ export default function SwordXStaffCommunity() {
     } else {
       const newId = sectionFormData.name.toLowerCase().replace(/\s+/g, '-');
       try {
-        // FIX #2: Use the API response instead of creating local object
         const created = await api('/api/sections', { method: 'POST', body: JSON.stringify({ sectionId: newId, name: sectionFormData.name, visible: sectionFormData.visible }) });
         const newSection = { 
           id: created.section_id || newId, 
@@ -678,10 +673,8 @@ export default function SwordXStaffCommunity() {
     setSectionFormData({ ...section });
   }, []);
 
-  // FIX #3: Fix deleteSection to use correct identifier
   const deleteSection = useCallback((id) => {
     const section = sections.find(s => s.id === id);
-    // For custom sections, use section_id; for defaults, use id
     const identifier = section?.section_id || section?.id;
     showConfirm(
       'Delete Section',
@@ -699,15 +692,12 @@ export default function SwordXStaffCommunity() {
     );
   }, [sections, logAction]);
 
-  // FIX #4: Make toggleSectionVisibility persist to backend
   const toggleSectionVisibility = useCallback(async (id) => {
     const section = sections.find(s => s.id === id);
     const newVisibility = !section?.visible;
     
-    // Update local state immediately for UX
     setSections(sections.map(s => s.id === id ? { ...s, visible: newVisibility } : s));
     
-    // Persist to backend
     try {
       await api('/api/sections', { 
         method: 'POST', 
@@ -720,7 +710,6 @@ export default function SwordXStaffCommunity() {
       logAction('EDIT', 'SECTION_VISIBILITY', section?.name, `Toggled visibility to ${newVisibility}`);
     } catch (err) {
       console.error('Failed to save visibility:', err);
-      // Revert on error
       setSections(sections.map(s => s.id === id ? { ...s, visible: section?.visible } : s));
       showError('Failed to save section visibility');
     }
@@ -924,7 +913,6 @@ export default function SwordXStaffCommunity() {
       </nav>
 
       <main className="relative max-w-7xl mx-auto px-6 py-12">
-        {/* Ensure non-admins can't view hidden sections */}
         {!isAdmin && activeTab !== 'settings' && !displaySections.find(s => s.id === activeTab) && (
           <div className="mb-6 p-4 bg-red-900/40 border border-red-600/50 rounded-lg">
             <p className="text-red-200">This section is not available.</p>
@@ -1224,77 +1212,215 @@ export default function SwordXStaffCommunity() {
           )
         ))}
 
-        {/* SETTINGS */}
+        {/* SETTINGS - IMPROVED DESIGN */}
         {activeTab === 'settings' && isAdmin && (
-          <div className="space-y-6">
-            <h2 className="text-3xl font-black bg-gradient-to-r from-purple-300 to-pink-500 bg-clip-text text-transparent">Admin Settings</h2>
+          <div className="space-y-8">
+            <div className="flex items-center gap-3 mb-8">
+              <Settings size={32} className="text-purple-400" />
+              <h2 className="text-4xl font-black bg-gradient-to-r from-purple-300 via-pink-400 to-purple-300 bg-clip-text text-transparent">Admin Settings</h2>
+            </div>
 
-            {/* Announcements */}
-            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
-              <h3 className="font-bold text-lg text-slate-300 mb-4">Announcements</h3>
+            {/* ANNOUNCEMENTS CARD */}
+            <div className="group bg-gradient-to-br from-slate-800/60 to-slate-900/40 border border-purple-600/20 rounded-2xl p-8 hover:border-purple-600/40 transition-all duration-300 backdrop-blur">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+                  <AlertCircle size={20} className="text-white" />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-100">Announcements</h3>
+              </div>
+
               {editingAnnouncement ? (
-                <div className="space-y-4 bg-slate-700/30 p-4 rounded-lg">
-                  <textarea className={`${inputCls} h-20`} placeholder='e.g., "Check the new YouTube video!"' value={announcementText} onChange={(e) => setAnnouncementText(e.target.value)} autoFocus />
-                  <div className="flex gap-2">
-                    <select value={announcementColor} onChange={(e) => setAnnouncementColor(e.target.value)} className={`${inputCls} flex-1`}>
-                      <option value="amber">Amber</option>
-                      <option value="red">Red</option>
-                      <option value="blue">Blue</option>
-                      <option value="green">Green</option>
-                    </select>
+                <div className="space-y-4 bg-slate-800/50 p-6 rounded-xl">
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-300">Announcement Message</label>
+                    <textarea 
+                      className={`${inputCls} h-24 resize-none focus:ring-2 focus:ring-amber-500`}
+                      placeholder='e.g., "🎮 New season drops this Friday!"' 
+                      value={announcementText} 
+                      onChange={(e) => setAnnouncementText(e.target.value)} 
+                      autoFocus 
+                    />
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={saveAnnouncement} className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold flex items-center justify-center gap-2 text-white"><Save size={16} /> Save</button>
-                    <button onClick={() => { setEditingAnnouncement(false); setAnnouncementText(announcement || ''); }} className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-white">Cancel</button>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-300">Theme Color</label>
+                    <div className="grid grid-cols-4 gap-3">
+                      {['amber', 'red', 'blue', 'green'].map(color => (
+                        <button
+                          key={color}
+                          onClick={() => setAnnouncementColor(color)}
+                          className={`h-12 rounded-lg font-semibold capitalize transition-all transform ${
+                            announcementColor === color
+                              ? `ring-2 ring-offset-2 ring-offset-slate-800 scale-105 ${
+                                  color === 'amber' ? 'bg-amber-500 ring-amber-400 text-black' :
+                                  color === 'red' ? 'bg-red-500 ring-red-400 text-white' :
+                                  color === 'blue' ? 'bg-blue-500 ring-blue-400 text-white' :
+                                  'bg-green-500 ring-green-400 text-white'
+                                }`
+                              : `bg-slate-700 text-slate-300 hover:bg-slate-600 ${
+                                  color === 'amber' ? 'border border-amber-600/50' :
+                                  color === 'red' ? 'border border-red-600/50' :
+                                  color === 'blue' ? 'border border-blue-600/50' :
+                                  'border border-green-600/50'
+                                }`
+                          }`}
+                        >
+                          {color === announcementColor && '✓'} {color}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-4">
+                    <button 
+                      onClick={saveAnnouncement} 
+                      className="flex-1 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 rounded-lg font-semibold text-white flex items-center justify-center gap-2 transition-all transform hover:scale-105"
+                    >
+                      <Save size={18} /> Save Announcement
+                    </button>
+                    <button 
+                      onClick={() => { setEditingAnnouncement(false); setAnnouncementText(announcement || ''); }} 
+                      className="flex-1 px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-semibold transition-all"
+                    >
+                      Cancel
+                    </button>
                   </div>
                 </div>
               ) : announcement ? (
-                <div className="bg-slate-700/30 rounded-lg p-4">
-                  <p className="text-slate-300 mb-3 font-semibold">Current:</p>
-                  <p className="text-slate-200 mb-4">{announcement}</p>
-                  <div className="flex gap-2">
-                    <button onClick={() => { setEditingAnnouncement(true); setAnnouncementText(announcement); }} className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold flex items-center gap-2 text-amber-300"><Edit3 size={14} /> Edit</button>
-                    <button onClick={deleteAnnouncement} className="px-4 py-2 bg-red-600/40 hover:bg-red-600/60 rounded-lg text-sm font-semibold flex items-center gap-2 text-red-300"><Trash2 size={14} /> Delete</button>
+                <div className="space-y-4">
+                  <div className="bg-gradient-to-r from-slate-700/40 to-slate-800/40 rounded-xl p-6 border border-slate-600/20">
+                    <p className="text-sm text-slate-400 font-semibold mb-3 uppercase tracking-wider">Current Announcement</p>
+                    <p className="text-lg text-slate-100 font-medium leading-relaxed">{announcement}</p>
+                    <div className="mt-4 inline-block px-3 py-1 rounded-full text-xs font-bold"
+                      style={{
+                        backgroundColor: announcementColor === 'red' ? 'rgba(239, 68, 68, 0.2)' :
+                                        announcementColor === 'blue' ? 'rgba(59, 130, 246, 0.2)' :
+                                        announcementColor === 'green' ? 'rgba(34, 197, 94, 0.2)' :
+                                        'rgba(217, 119, 6, 0.2)',
+                        color: announcementColor === 'red' ? '#fca5a5' :
+                              announcementColor === 'blue' ? '#93c5fd' :
+                              announcementColor === 'green' ? '#86efac' :
+                              '#fbbf24'
+                      }}
+                    >
+                      {announcementColor.toUpperCase()}
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={() => { setEditingAnnouncement(true); setAnnouncementText(announcement); }} 
+                      className="flex-1 px-6 py-3 bg-amber-600/40 hover:bg-amber-600/60 border border-amber-600/50 rounded-lg font-semibold text-amber-300 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Edit3 size={18} /> Edit
+                    </button>
+                    <button 
+                      onClick={deleteAnnouncement} 
+                      className="flex-1 px-6 py-3 bg-red-600/40 hover:bg-red-600/60 border border-red-600/50 rounded-lg font-semibold text-red-300 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Trash2 size={18} /> Delete
+                    </button>
                   </div>
                 </div>
               ) : (
-                <div className="bg-slate-700/30 rounded-lg p-4 text-center">
-                  <p className="text-slate-400 text-sm mb-3">No announcement active</p>
-                  <button onClick={() => setEditingAnnouncement(true)} className="px-4 py-2 bg-amber-600/40 hover:bg-amber-600/60 rounded-lg text-sm font-semibold text-amber-300">Create Announcement</button>
+                <div className="text-center py-12 bg-slate-800/30 rounded-xl border border-dashed border-slate-600/50">
+                  <p className="text-slate-400 mb-4">No announcement active</p>
+                  <button 
+                    onClick={() => setEditingAnnouncement(true)} 
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg font-semibold text-white transition-all transform hover:scale-105"
+                  >
+                    <Plus size={18} /> Create Announcement
+                  </button>
                 </div>
               )}
             </div>
 
-            {/* Manage Sections */}
-            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-6">
-              <h3 className="font-bold text-lg text-slate-300 mb-4">Manage Sections</h3>
-              <div className="space-y-3 mb-4">
+            {/* SECTIONS CARD */}
+            <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/40 border border-blue-600/20 rounded-2xl p-8 hover:border-blue-600/40 transition-all duration-300 backdrop-blur">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
+                  <ChevronDown size={20} className="text-white" />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-100">Manage Sections</h3>
+              </div>
+
+              <div className="space-y-3 mb-6">
                 {sections.map((section) => (
-                  <div key={section.id} className="bg-slate-700/30 rounded-lg p-4 flex items-center justify-between">
-                    <div className="flex-1">
-                      <h4 className="font-semibold text-slate-200">{section.name}</h4>
-                      <p className="text-xs text-slate-400">ID: {section.id || section.section_id}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => toggleSectionVisibility(section.id)} className={`px-3 py-2 rounded text-sm ${section.visible ? 'bg-green-600/40 text-green-300' : 'bg-red-600/40 text-red-300'}`}>
-                        {section.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                      </button>
-                      <button onClick={() => editSection(section)} className="px-3 py-2 bg-blue-600/40 hover:bg-blue-600/60 rounded text-sm"><Edit3 size={14} /></button>
-                      <button onClick={() => deleteSection(section.id || section.section_id)} className="px-3 py-2 bg-red-600/40 hover:bg-red-600/60 rounded text-sm"><Trash2 size={14} /></button>
+                  <div 
+                    key={section.id} 
+                    className="group bg-gradient-to-r from-slate-700/40 to-slate-800/40 hover:from-slate-700/60 hover:to-slate-800/60 rounded-xl p-5 border border-slate-600/30 hover:border-slate-500/50 transition-all duration-200"
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-bold text-lg text-slate-100 truncate">{section.name}</h4>
+                        <p className="text-xs text-slate-400 font-mono mt-1">ID: {section.id || section.section_id}</p>
+                      </div>
+                      <div className="flex gap-2 flex-shrink-0">
+                        <button 
+                          onClick={() => toggleSectionVisibility(section.id)} 
+                          className={`p-3 rounded-lg transition-all transform hover:scale-110 ${
+                            section.visible 
+                              ? 'bg-green-600/40 text-green-400 border border-green-600/50 hover:bg-green-600/60' 
+                              : 'bg-red-600/40 text-red-400 border border-red-600/50 hover:bg-red-600/60'
+                          }`}
+                          title={section.visible ? 'Click to hide' : 'Click to show'}
+                        >
+                          {section.visible ? <Eye size={16} /> : <EyeOff size={16} />}
+                        </button>
+                        <button 
+                          onClick={() => editSection(section)} 
+                          className="p-3 rounded-lg bg-blue-600/40 hover:bg-blue-600/60 text-blue-400 border border-blue-600/50 transition-all transform hover:scale-110"
+                          title="Edit section"
+                        >
+                          <Edit3 size={16} />
+                        </button>
+                        <button 
+                          onClick={() => deleteSection(section.id || section.section_id)} 
+                          className="p-3 rounded-lg bg-red-600/40 hover:bg-red-600/60 text-red-400 border border-red-600/50 transition-all transform hover:scale-110"
+                          title="Delete section"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
+
               {(editingSectionId || addingNewSection) && (
-                <div className="bg-slate-600/30 rounded-lg p-4 space-y-3">
-                  <input className={inputCls} placeholder="Section Name" value={sectionFormData.name || ''} onChange={e => handleSectionFormChange('name', e.target.value)} />
-                  <div className="flex gap-2">
-                    <button onClick={saveSection} className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold text-sm flex items-center justify-center gap-2"><Save size={14} /> Save</button>
-                    <button onClick={cancelSectionEdit} className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg text-sm">Cancel</button>
+                <div className="bg-gradient-to-br from-purple-900/30 to-pink-900/30 border border-purple-600/50 rounded-xl p-6 space-y-4 mb-6">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-300 block mb-2">Section Name</label>
+                    <input 
+                      className={inputCls} 
+                      placeholder="Enter section name..." 
+                      value={sectionFormData.name || ''} 
+                      onChange={e => handleSectionFormChange('name', e.target.value)} 
+                      autoFocus
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={saveSection} 
+                      className="flex-1 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 rounded-lg font-semibold text-white flex items-center justify-center gap-2 transition-all transform hover:scale-105"
+                    >
+                      <Save size={18} /> {editingSectionId ? 'Update' : 'Create'}
+                    </button>
+                    <button 
+                      onClick={cancelSectionEdit} 
+                      className="flex-1 px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-semibold transition-all"
+                    >
+                      Cancel
+                    </button>
                   </div>
                 </div>
               )}
-              <button onClick={addSection} className="w-full mt-4 px-4 py-2 bg-green-600/40 hover:bg-green-600/60 border border-green-600 rounded-lg font-semibold text-sm flex items-center justify-center gap-2"><Plus size={16} /> Add New Section</button>
+
+              <button 
+                onClick={addSection} 
+                className="w-full px-6 py-4 bg-gradient-to-r from-blue-600/40 to-cyan-600/40 hover:from-blue-600/60 hover:to-cyan-600/60 border border-blue-600 rounded-xl font-semibold text-blue-300 flex items-center justify-center gap-2 transition-all transform hover:scale-105"
+              >
+                <Plus size={20} /> Add New Section
+              </button>
             </div>
           </div>
         )}
