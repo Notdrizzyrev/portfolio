@@ -12,298 +12,254 @@
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            background: #0f172a;
             color: #f1f5f9;
-            line-height: 1.6;
-            min-height: 100vh;
+            font-family: system-ui, sans-serif;
+            padding: 20px;
         }
         
         .container {
-            max-width: 1200px;
+            max-width: 900px;
             margin: 0 auto;
-            padding: 40px 20px;
         }
         
-        .hero {
+        h1 {
+            font-size: 48px;
             text-align: center;
-            margin-bottom: 60px;
-        }
-        
-        .hero h1 {
-            font-size: 64px;
+            margin: 40px 0 10px;
             font-weight: 900;
-            margin-bottom: 10px;
-            letter-spacing: -2px;
         }
         
-        .hero .subtitle {
-            color: #fbbf24;
-            font-size: 20px;
-            font-weight: 500;
-            margin-bottom: 20px;
-        }
-        
-        .hero .description {
-            color: #cbd5e1;
-            font-size: 18px;
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        
-        .section-title {
-            font-size: 28px;
-            font-weight: 700;
+        .role {
             text-align: center;
-            margin-bottom: 40px;
-            text-transform: none;
+            color: #fbbf24;
+            font-size: 18px;
+            margin-bottom: 15px;
+            font-weight: 600;
         }
         
-        .servers-label {
+        .desc {
+            text-align: center;
+            color: #cbd5e1;
+            margin-bottom: 60px;
+            font-size: 16px;
+        }
+        
+        .section-label {
+            text-align: center;
             color: #94a3b8;
             font-size: 12px;
             text-transform: uppercase;
-            letter-spacing: 2px;
-            text-align: center;
-            margin-bottom: 30px;
+            letter-spacing: 1px;
+            margin-bottom: 20px;
         }
         
-        .grid {
+        .servers {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
             margin-bottom: 60px;
         }
         
-        .card {
-            background: rgba(30, 41, 59, 0.7);
-            border: 1px solid rgba(71, 85, 105, 0.5);
-            border-radius: 12px;
-            padding: 24px;
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-        }
-        
-        .card:hover {
-            border-color: #fbbf24;
-            transform: translateY(-4px);
-        }
-        
-        .card h3 {
-            color: #fff;
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 12px;
-        }
-        
-        .card .number {
-            color: #fbbf24;
-            font-size: 32px;
-            font-weight: 700;
-            margin-bottom: 4px;
-        }
-        
-        .card .label {
-            color: #94a3b8;
-            font-size: 12px;
-        }
-        
-        .services-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 24px;
-            margin-bottom: 60px;
-        }
-        
-        .service-card {
-            background: rgba(30, 41, 59, 0.5);
-            border: 1px solid rgba(71, 85, 105, 0.3);
-            border-radius: 12px;
+        .server-card {
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 10px;
             padding: 20px;
             text-align: center;
-            transition: all 0.3s ease;
         }
         
-        .service-card:hover {
-            border-color: #fbbf24;
-            background: rgba(30, 41, 59, 0.7);
+        .server-card h3 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .server-card .count {
+            font-size: 24px;
+            color: #fbbf24;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .server-card .label {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        
+        h2 {
+            font-size: 32px;
+            text-align: center;
+            margin: 60px 0 30px;
+            font-weight: 700;
+        }
+        
+        .services {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 15px;
+            margin-bottom: 60px;
+        }
+        
+        .service {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            font-size: 14px;
+            line-height: 1.4;
         }
         
         .service-icon {
-            font-size: 32px;
-            margin-bottom: 12px;
+            font-size: 28px;
+            margin-bottom: 8px;
+            display: block;
         }
         
-        .service-card p {
-            color: #f1f5f9;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .pricing-section {
-            background: linear-gradient(135deg, rgba(217, 119, 6, 0.15), rgba(217, 119, 6, 0.05));
+        .pricing {
+            background: linear-gradient(135deg, rgba(217, 119, 6, 0.2), rgba(217, 119, 6, 0.05));
             border: 1px solid rgba(251, 191, 36, 0.3);
-            border-radius: 12px;
-            padding: 48px;
+            border-radius: 10px;
+            padding: 40px 20px;
             text-align: center;
         }
         
-        .pricing-section h2 {
-            font-size: 28px;
-            font-weight: 700;
-            margin-bottom: 30px;
+        .pricing h2 {
+            margin-top: 0;
         }
         
-        .price-display {
-            margin-bottom: 30px;
+        .price-box {
+            margin: 20px 0;
         }
         
         .price-label {
             color: #fbbf24;
+            font-size: 14px;
             font-weight: 600;
             margin-bottom: 10px;
         }
         
         .price {
-            font-size: 56px;
+            font-size: 48px;
             font-weight: 900;
             color: #fff;
         }
         
-        .payment-method {
-            background: rgba(15, 23, 42, 0.5);
+        .payment {
+            background: rgba(15, 23, 42, 0.8);
             border-radius: 8px;
-            padding: 16px;
-            color: #cbd5e1;
+            padding: 12px;
+            margin: 20px 0;
             font-size: 14px;
-            max-width: 400px;
-            margin: 0 auto 20px;
+            color: #cbd5e1;
         }
         
         .footer {
             text-align: center;
-            margin-top: 60px;
+            margin-top: 50px;
             padding-top: 30px;
-            border-top: 1px solid rgba(71, 85, 105, 0.3);
+            border-top: 1px solid #334155;
+            font-size: 12px;
             color: #94a3b8;
-            font-size: 14px;
-        }
-        
-        @media (max-width: 768px) {
-            .hero h1 {
-                font-size: 40px;
-            }
-            
-            .grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .services-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            
-            .pricing-section {
-                padding: 30px 20px;
-            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="hero">
-            <h1>drizzyrev</h1>
-            <p class="subtitle">Community Manager</p>
-            <p class="description">Dependable, experienced. Helping you with your Discord Server.</p>
-        </div>
+        <h1>drizzyrev</h1>
+        <p class="role">Community Manager</p>
+        <p class="desc">Dependable, experienced. Helping you with your Discord Server.</p>
 
-        <div class="servers-label">Servers Managed</div>
-        <div class="grid">
-            <div class="card">
+        <p class="section-label">Servers Managed</p>
+        <div class="servers">
+            <div class="server-card">
                 <h3>Chromerius</h3>
-                <div class="number">200k</div>
+                <div class="count">200k</div>
                 <div class="label">members</div>
             </div>
-            <div class="card">
+            <div class="server-card">
                 <h3>Tuff Guys</h3>
-                <div class="number">50,000</div>
+                <div class="count">50k</div>
                 <div class="label">members</div>
             </div>
-            <div class="card">
+            <div class="server-card">
                 <h3>Bagel SMP</h3>
-                <div class="number">3,000</div>
+                <div class="count">3k</div>
                 <div class="label">members</div>
             </div>
-            <div class="card">
-                <h3>Crusty AFK Pvt.</h3>
-                <div class="number">6,000</div>
+            <div class="server-card">
+                <h3>Crusty AFK</h3>
+                <div class="count">6k</div>
                 <div class="label">members</div>
             </div>
-            <div class="card">
+            <div class="server-card">
                 <h3>Rod And Reef</h3>
-                <div class="number">5,000</div>
+                <div class="count">5k</div>
                 <div class="label">members</div>
             </div>
-            <div class="card">
-                <h3>Sword X Staff Guide</h3>
-                <div class="number">7,000</div>
+            <div class="server-card">
+                <h3>Sword X Staff</h3>
+                <div class="count">7k</div>
                 <div class="label">members</div>
             </div>
-            <div class="card">
-                <h3>Last Stand Arena</h3>
-                <div class="number">100</div>
+            <div class="server-card">
+                <h3>Last Stand</h3>
+                <div class="count">100</div>
                 <div class="label">members</div>
             </div>
         </div>
 
-        <h2 class="section-title">What I Offer</h2>
-        <div class="services-grid">
-            <div class="service-card">
-                <div class="service-icon">⚙️</div>
-                <p>Role & Permission Setup</p>
+        <h2>What I Offer</h2>
+        <div class="services">
+            <div class="service">
+                <span class="service-icon">⚙️</span>
+                Role & Permission Setup
             </div>
-            <div class="service-card">
-                <div class="service-icon">📋</div>
-                <p>Channel Organization</p>
+            <div class="service">
+                <span class="service-icon">📋</span>
+                Channel Organization
             </div>
-            <div class="service-card">
-                <div class="service-icon">🤖</div>
-                <p>Bot Setup & Config</p>
+            <div class="service">
+                <span class="service-icon">🤖</span>
+                Bot Setup & Config
             </div>
-            <div class="service-card">
-                <div class="service-icon">🎫</div>
-                <p>Ticket Systems</p>
+            <div class="service">
+                <span class="service-icon">🎫</span>
+                Ticket Systems
             </div>
-            <div class="service-card">
-                <div class="service-icon">🛡️</div>
-                <p>Anti-Raid Protection</p>
+            <div class="service">
+                <span class="service-icon">🛡️</span>
+                Anti-Raid Protection
             </div>
-            <div class="service-card">
-                <div class="service-icon">🔒</div>
-                <p>Server Security</p>
+            <div class="service">
+                <span class="service-icon">🔒</span>
+                Server Security
             </div>
-            <div class="service-card">
-                <div class="service-icon">📊</div>
-                <p>Automod & Logging</p>
+            <div class="service">
+                <span class="service-icon">📊</span>
+                Automod & Logging
             </div>
-            <div class="service-card">
-                <div class="service-icon">🚀</div>
-                <p>Ongoing Improvements</p>
+            <div class="service">
+                <span class="service-icon">🚀</span>
+                Ongoing Improvements
             </div>
         </div>
 
-        <div class="pricing-section">
+        <div class="pricing">
             <h2>Pricing</h2>
-            <div class="price-display">
+            <div class="price-box">
                 <div class="price-label">Monthly</div>
                 <div class="price">$20</div>
             </div>
-            <div class="payment-method">
-                <div>💎 Payment via Cash App</div>
+            <div class="payment">💎 Payment via Cash App</div>
+            <div class="payment" style="margin-top: 15px; font-size: 13px;">
+                50% upfront to start · 50% upon completion
             </div>
         </div>
 
         <div class="footer">
-            <p>© Community Manager Portfolio</p>
+            © Community Manager Portfolio
         </div>
     </div>
 </body>
