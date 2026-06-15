@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>drizzyrev - Community Manager</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: #f1f5f9;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        .hero {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        
+        .hero h1 {
+            font-size: 64px;
+            font-weight: 900;
+            margin-bottom: 10px;
+            letter-spacing: -2px;
+        }
+        
+        .hero .subtitle {
+            color: #fbbf24;
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 20px;
+        }
+        
+        .hero .description {
+            color: #cbd5e1;
+            font-size: 18px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .section-title {
+            font-size: 28px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 40px;
+            text-transform: none;
+        }
+        
+        .servers-label {
+            color: #94a3b8;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 60px;
+        }
+        
+        .card {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(71, 85, 105, 0.5);
+            border-radius: 12px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .card:hover {
+            border-color: #fbbf24;
+            transform: translateY(-4px);
+        }
+        
+        .card h3 {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        
+        .card .number {
+            color: #fbbf24;
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        
+        .card .label {
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 24px;
+            margin-bottom: 60px;
+        }
+        
+        .service-card {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid rgba(71, 85, 105, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .service-card:hover {
+            border-color: #fbbf24;
+            background: rgba(30, 41, 59, 0.7);
+        }
+        
+        .service-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
+        
+        .service-card p {
+            color: #f1f5f9;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .pricing-section {
+            background: linear-gradient(135deg, rgba(217, 119, 6, 0.15), rgba(217, 119, 6, 0.05));
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            border-radius: 12px;
+            padding: 48px;
+            text-align: center;
+        }
+        
+        .pricing-section h2 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 30px;
+        }
+        
+        .price-display {
+            margin-bottom: 30px;
+        }
+        
+        .price-label {
+            color: #fbbf24;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .price {
+            font-size: 56px;
+            font-weight: 900;
+            color: #fff;
+        }
+        
+        .payment-method {
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: 8px;
+            padding: 16px;
+            color: #cbd5e1;
+            font-size: 14px;
+            max-width: 400px;
+            margin: 0 auto 20px;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 60px;
+            padding-top: 30px;
+            border-top: 1px solid rgba(71, 85, 105, 0.3);
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 40px;
+            }
+            
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .services-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .pricing-section {
+                padding: 30px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>drizzyrev</h1>
+            <p class="subtitle">Community Manager</p>
+            <p class="description">Dependable, experienced. Helping you with your Discord Server.</p>
+        </div>
+
+        <div class="servers-label">Servers Managed</div>
+        <div class="grid">
+            <div class="card">
+                <h3>Chromerius</h3>
+                <div class="number">200k</div>
+                <div class="label">members</div>
+            </div>
+            <div class="card">
+                <h3>Tuff Guys</h3>
+                <div class="number">50,000</div>
+                <div class="label">members</div>
+            </div>
+            <div class="card">
+                <h3>Bagel SMP</h3>
+                <div class="number">3,000</div>
+                <div class="label">members</div>
+            </div>
+            <div class="card">
+                <h3>Crusty AFK Pvt.</h3>
+                <div class="number">6,000</div>
+                <div class="label">members</div>
+            </div>
+            <div class="card">
+                <h3>Rod And Reef</h3>
+                <div class="number">5,000</div>
+                <div class="label">members</div>
+            </div>
+            <div class="card">
+                <h3>Sword X Staff Guide</h3>
+                <div class="number">7,000</div>
+                <div class="label">members</div>
+            </div>
+            <div class="card">
+                <h3>Last Stand Arena</h3>
+                <div class="number">100</div>
+                <div class="label">members</div>
+            </div>
+        </div>
+
+        <h2 class="section-title">What I Offer</h2>
+        <div class="services-grid">
+            <div class="service-card">
+                <div class="service-icon">⚙️</div>
+                <p>Role & Permission Setup</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">📋</div>
+                <p>Channel Organization</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">🤖</div>
+                <p>Bot Setup & Config</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">🎫</div>
+                <p>Ticket Systems</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">🛡️</div>
+                <p>Anti-Raid Protection</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">🔒</div>
+                <p>Server Security</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">📊</div>
+                <p>Automod & Logging</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">🚀</div>
+                <p>Ongoing Improvements</p>
+            </div>
+        </div>
+
+        <div class="pricing-section">
+            <h2>Pricing</h2>
+            <div class="price-display">
+                <div class="price-label">Monthly</div>
+                <div class="price">$20</div>
+            </div>
+            <div class="payment-method">
+                <div>💎 Payment via Cash App</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>© Community Manager Portfolio</p>
+        </div>
+    </div>
+</body>
+</html>
