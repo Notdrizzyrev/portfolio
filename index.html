@@ -1,39 +1,332 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>drizzyrev - Community Manager</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            background: #0f172a;
-            color: #f1f5f9;
-            font-family: system-ui, sans-serif;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-        
-        h1 {
-            font-size: 48px;
-            text-align: center;
-            margin: 40px 0 10px;
-            font-weight: 900;
-        }
-        
-        .role {
-            text-align: center;
-            color: #fbbf24;
-            font-size: 18px;
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>drizzyrev — Server Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0c0f;
+    --panel:#111418;
+    --paper:#e7e4dc;
+    --muted:#7d8790;
+    --steel:#2a3138;
+    --signal:#5eead4;
+    --alert:#fb7185;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:'Inter',system-ui,sans-serif;
+    line-height:1.5;
+    padding:32px 16px 80px;
+  }
+  .wrap{max-width:760px;margin:0 auto;}
+
+  /* terminal window chrome */
+  .term{
+    background:var(--panel);
+    border:1px solid var(--steel);
+    border-radius:8px;
+    overflow:hidden;
+    margin-bottom:28px;
+  }
+  .term-bar{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:10px 14px;
+    background:#0d1013;
+    border-bottom:1px solid var(--steel);
+  }
+  .dot{width:10px;height:10px;border-radius:50%;}
+  .dot.r{background:#4a4d55;}
+  .dot.y{background:#4a4d55;}
+  .dot.g{background:#4a4d55;}
+  .term-title{
+    margin-left:8px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    color:var(--muted);
+    letter-spacing:.02em;
+  }
+  .term-body{padding:24px 20px;}
+
+  .prompt{
+    font-family:'JetBrains Mono',monospace;
+    font-size:13px;
+    color:var(--signal);
+  }
+  .prompt::before{content:"$ ";color:var(--muted);}
+
+  h1{
+    font-family:'JetBrains Mono',monospace;
+    font-weight:800;
+    font-size:clamp(32px,7vw,44px);
+    letter-spacing:-0.02em;
+    margin:14px 0 4px;
+  }
+  h1 .cursor{
+    display:inline-block;
+    width:.5em;
+    background:var(--signal);
+    margin-left:4px;
+    animation:blink 1.1s steps(1) infinite;
+  }
+  @media (prefers-reduced-motion: reduce){ h1 .cursor{animation:none;} }
+  @keyframes blink{50%{opacity:0;}}
+
+  .role{
+    font-family:'JetBrains Mono',monospace;
+    color:var(--muted);
+    font-size:13px;
+    margin-bottom:14px;
+  }
+  .desc{color:var(--paper);opacity:.85;font-size:15px;max-width:52ch;}
+
+  .section-head{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    color:var(--muted);
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    margin:0 0 14px;
+    padding-bottom:10px;
+    border-bottom:1px solid var(--steel);
+  }
+  .section-head .prompt{font-size:12px;}
+
+  /* server status table */
+  .table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:13px;}
+  .table tr{border-bottom:1px solid var(--steel);}
+  .table tr:last-child{border-bottom:none;}
+  .table td{padding:11px 4px;vertical-align:middle;}
+  .table td.name{color:var(--paper);font-weight:500;}
+  .table td.count{color:var(--signal);text-align:right;}
+  .table td.unit{color:var(--muted);font-size:11px;padding-left:4px;text-align:left;}
+  .status{
+    display:inline-flex;align-items:center;gap:6px;
+    color:var(--muted);font-size:11px;
+  }
+  .status .led{
+    width:6px;height:6px;border-radius:50%;
+    background:var(--signal);
+    box-shadow:0 0 6px var(--signal);
+  }
+
+  /* services list */
+  .svc-list{display:flex;flex-direction:column;}
+  .svc{
+    display:flex;
+    align-items:flex-start;
+    gap:14px;
+    padding:14px 0;
+    border-bottom:1px solid var(--steel);
+  }
+  .svc:last-child{border-bottom:none;}
+  .svc svg{flex-shrink:0;margin-top:2px;color:var(--signal);}
+  .svc-name{font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:500;color:var(--paper);}
+  .svc-detail{font-size:13px;color:var(--muted);margin-top:2px;}
+
+  /* pricing / invoice block */
+  .invoice{font-family:'JetBrains Mono',monospace;font-size:13px;}
+  .invoice .line{
+    display:flex;justify-content:space-between;
+    padding:8px 0;border-bottom:1px dashed var(--steel);color:var(--muted);
+  }
+  .invoice .line span:last-child{color:var(--paper);}
+  .invoice .total{
+    display:flex;justify-content:space-between;align-items:baseline;
+    padding:18px 0 4px;
+  }
+  .invoice .total .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;}
+  .invoice .total .amount{font-size:36px;font-weight:800;color:var(--paper);}
+  .invoice .amount .per{font-size:14px;color:var(--muted);font-weight:400;}
+  .terms{margin-top:16px;font-size:12px;color:var(--muted);}
+  .terms b{color:var(--signal);font-weight:600;}
+
+  .footer{
+    text-align:center;
+    margin-top:36px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    color:var(--muted);
+  }
+
+  /* wordmark */
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:20px;
+  }
+  .brand-mark{
+    width:32px;height:32px;
+    border-radius:7px;
+    background:var(--panel);
+    border:1px solid var(--steel);
+    display:flex;align-items:center;justify-content:center;
+    font-family:'JetBrains Mono',monospace;
+    font-weight:700;
+    font-size:14px;
+    color:var(--signal);
+    flex-shrink:0;
+  }
+  .brand-word{
+    font-family:'JetBrains Mono',monospace;
+    font-weight:700;
+    font-size:14px;
+    letter-spacing:.02em;
+    color:var(--paper);
+  }
+
+  /* case study */
+  .case{
+    padding:16px 0;
+    border-bottom:1px solid var(--steel);
+  }
+  .case:last-child{border-bottom:none;}
+  .case-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    margin-bottom:6px;
+  }
+  .case-name{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:14px;color:var(--paper);}
+  .case-scale{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--signal);}
+  .case-detail{font-size:13px;color:var(--muted);line-height:1.55;}
+  .case-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .case-tag{
+    font-family:'JetBrains Mono',monospace;
+    font-size:10.5px;
+    color:var(--muted);
+    border:1px solid var(--steel);
+    border-radius:4px;
+    padding:2px 7px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <div class="brand-mark">&gt;_</div>
+    <div class="brand-word">drizzyrev</div>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="term-title">drizzyrev@ops — zsh</span>
+    </div>
+    <div class="term-body">
+      <div class="prompt">whoami</div>
+      <h1>drizzyrev<span class="cursor">&nbsp;</span></h1>
+      <div class="role">community manager</div>
+      <p class="desc">Dependable, hands-on Discord server management — setup, moderation infrastructure, and ongoing maintenance.</p>
+    </div>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="term-title">servers --status</span>
+    </div>
+    <div class="term-body">
+      <table class="table">
+        <tbody>
+          <tr><td class="name">Chromerius</td><td class="count">200</td><td class="unit">k members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Tuff Guys</td><td class="count">50</td><td class="unit">k members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Sword X Staff</td><td class="count">11</td><td class="unit">k members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Crusty AFK</td><td class="count">6</td><td class="unit">k members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Rod And Reef</td><td class="count">5</td><td class="unit">k members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Bagel SMP</td><td class="count">3</td><td class="unit">k members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Pursued</td><td class="count">200</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Last Stand</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">Yononaka</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">United States Military</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="term-title">services --list</span>
+    </div>
+    <div class="term-body">
+      <div class="svc-list">
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <div><div class="svc-name">Role &amp; permission setup</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7l3-4h12l3 4M3 7v13a1 1 0 001 1h16a1 1 0 001-1V7M3 7h18M9 11h6"/></svg>
+          <div><div class="svc-name">Channel organization</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="16" height="12" rx="2"/><circle cx="9" cy="13" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.2" fill="currentColor" stroke="none"/><path d="M12 7V4M9 4h6"/></svg>
+          <div><div class="svc-name">Bot setup &amp; config</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 5H4v5c0 1 .5 1.7 1 2l6 6 5-5-6-6c-.3-.5-1-1-1-2z"/><circle cx="7" cy="7" r="1" fill="currentColor" stroke="none"/></svg>
+          <div><div class="svc-name">Ticket systems</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l8 3v6c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V6l8-3z"/></svg>
+          <div><div class="svc-name">Anti-raid protection</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>
+          <div><div class="svc-name">Server security</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+          <div><div class="svc-name">Automod &amp; logging</div></div>
+        </div>
+
+        <div class="svc">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          <div><div class="svc-name">Ongoing improvements</div></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="term-title">generate-quote --monthly</span>
+    </div>
+    <div class="term-body">
+      <div class="invoice">
+        <div class="total">
+          <span class="label">Monthly rate</span>
+          <span class="amount">$20<span class="per"> / mo</span></span>
+        </div>
+        <div class="line"><span>payment methods</span><span>Cash App · PayPal</span></div>
+        <div class="line"><span>schedule</span><span>50% upfront · 50% on completion</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">community-manager-portfolio · session active</div>
+</div>
+</body>
+</html>
             margin-bottom: 15px;
             font-weight: 600;
         }
