@@ -6,6 +6,7 @@ body{background:var(--ink);color:var(--paper);font-family:'Inter',system-ui,sans
 /* brand + page nav */
 .brand{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
 .brand-mark{width:32px;height:32px;border-radius:7px;background:var(--panel);border:1px solid var(--steel);display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:var(--signal);flex-shrink:0;}
+.brand-icon{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:block;}
 .brand-word{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;letter-spacing:.02em;color:var(--paper);}
 .tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 24px;}
 .tabs a{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--muted);text-decoration:none;border:1px solid var(--steel);border-radius:6px;padding:8px 14px;}
