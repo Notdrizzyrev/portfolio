@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — drizzyrev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <div class="brand-mark">&gt;_</div>
+    <div class="brand-word">drizzyrev</div>
+  </div>
+
+  <nav class="tabs" aria-label="Pages">
+    <a href="/">Community Manager</a>
+    <a href="/privacy-policy/" class="active" aria-current="page">Privacy Policy</a>
+    <a href="/terms-of-service/">Terms of Service</a>
+  </nav>
+
+  <div class="term">
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">idlecraft --privacy</span></div>
+    <div class="term-body doc">
+      <div class="section-head"><span class="prompt">IdleCraft Privacy Policy</span></div>
+      <div class="meta"><strong>Last updated:</strong> October 18, 2026</div>
+      <p>IdleCraft is a Discord bot that runs AFK Minecraft bots from a control panel in Discord, and gives Discord server staff moderation, AutoMod and server tools. This policy explains what data IdleCraft handles, why, who can see it, and how to have it deleted. By using IdleCraft you agree to this policy and to the <a href="/terms-of-service/">Terms of Service</a>.</p>
+
+      <h3>1. The short version</h3>
+      <ul>
+        <li>IdleCraft keeps only what it needs to run your bot and the features a server turns on: your Discord user ID, the Discord server you registered in, the Minecraft server address and port you entered, your bot's username, and a generated in-game password. Server staff features also keep moderation records (section 2).</li>
+        <li><strong>IdleCraft can read messages in servers where it is present</strong>, so that commands typed as normal messages, AutoMod, auto-responses and similar features work. It does not save the text of ordinary messages and never sells it. Section 3 explains exactly what happens to message text.</li>
+        <li>When your bot joins a Minecraft server, the full server address is posted in the official IdleCraft Discord server so other members can join (see section 5).</li>
+        <li>You can delete your registration at any time with the <strong>Delete</strong> button on the panel.</li>
+      </ul>
+
+      <h3>2. Data we store</h3>
+      <p>When you register a bot:</p>
+      <ul>
+        <li>Your Discord user ID</li>
+        <li>The ID of the Discord server you registered through</li>
+        <li>The Minecraft server address and port you entered</li>
+        <li>Your bot's username (the one you chose, or a default)</li>
+        <li>A random password for the bot's account on that Minecraft server. You never choose or see it, and it is not your Discord or Minecraft account password. We store it so your bot can log in.</li>
+        <li>A session ID, when the registration was made, whether your bot is set to run, and when it was last used. This lets bots resume after a restart and lets us remove unused registrations.</li>
+        <li>A short history of your bot's connection events (for example connected, kicked, reconnecting) with the short reason the Minecraft server gave. It never includes passwords or full server addresses.</li>
+      </ul>
+      <p>When a server administrator or manager configures IdleCraft for their Discord server (for example with <code>/panel setup</code>):</p>
+      <ul>
+        <li>The server ID, panel channel ID and panel message ID</li>
+        <li>Role and channel IDs for panel access, staff roles, log channels and manager roles</li>
+        <li>Settings such as command on/off switches, command aliases and role or channel restrictions, session limits, the server's default Minecraft server, and shared-access settings</li>
+        <li>AutoMod settings: which protections are on, thresholds, the server's own custom filter words, link rules, and exempt roles and channels</li>
+        <li>Text the server's staff write for the bot to send: welcome and goodbye messages, custom commands, auto-responses, automatic reactions, and scheduled announcements, plus the roles given to new members</li>
+        <li>The ID of the person who changed a setting, and timestamps</li>
+      </ul>
+      <p>When moderators use moderation tools, or AutoMod acts:</p>
+      <ul>
+        <li>A case record: case number, type (for example warning, timeout, ban), the affected member's user ID, the moderator's user ID (or AutoMod), the reason text, the time, and any expiry time</li>
+        <li>Schedules for temporary bans and similar timed actions, so they still run after a restart</li>
+        <li>"Stop Ping" records: the user IDs of people who triggered mass-mention or repeated-ping protection. These IDs may also be written to a list file kept by the bot's operator.</li>
+        <li>An audit log of administrative actions: who did what, in which server, when, and whether it worked, with a short note. It does not include message text.</li>
+      </ul>
+      <p>Other data:</p>
+      <ul>
+        <li><strong>Reports</strong> you send with <code>/report</code>: the text you write, your user ID, the server ID and the time</li>
+        <li><strong>Reminders</strong> you create: the reminder text, your user ID and the time it is due</li>
+        <li><strong>Blocks:</strong> when we block a server or a user for abuse, the ID, the reason, who added the block, and timestamps</li>
+      </ul>
+
+      <h3>3. Data we handle but do not store</h3>
+      <ul>
+        <li><strong>Discord interactions.</strong> Button presses, slash commands and form input are processed to carry out your request.</li>
+        <li><strong>Message text.</strong> In servers where IdleCraft is present, it can see the text of messages together with who sent them and where. It checks them to recognise commands typed as normal messages, to run AutoMod (word, link, invite, mention, spam, capital-letter and repeat checks) and to trigger auto-responses and automatic reactions the server has set up. IdleCraft does not save ordinary messages. When AutoMod acts, the record keeps the rule that triggered and a short note, not a copy of the message. Staff members with moderation permissions are exempt from AutoMod.</li>
+        <li><strong>Message logging (optional).</strong> If a server administrator turns on logging, the text of messages that are edited or deleted is copied into that server's own log channel, where Discord keeps it and the server's staff can read it. Only messages IdleCraft had already seen can be logged.</li>
+        <li><strong>Member joins and leaves.</strong> If a server has turned on welcome, goodbye, auto-role or logging features, IdleCraft uses the member's ID and username to send the message, assign the role or write the log entry.</li>
+        <li><strong>In-game chat.</strong> Your bot is a Minecraft client. It reads chat from the Minecraft server it is on, in real time, to spot login prompts and queue messages and to choose a short canned reply. IdleCraft does not save that chat or forward it to Discord.</li>
+        <li><strong>Join events in the official server.</strong> In the official IdleCraft server only, when someone joins, IdleCraft briefly mentions them in the welcome channels and deletes the message. It uses only the new member's user ID and stores nothing.</li>
+        <li><strong>Translation (optional).</strong> If the operator has connected a translation service, text you send with <code>/translate</code> is passed to that service to be translated, and nothing is stored by IdleCraft.</li>
+        <li><strong>Operational logs.</strong> Our hosting provider keeps logs with bot names, Discord IDs, status events (connected, kicked, reconnecting) and errors. We use them for troubleshooting and abuse prevention.</li>
+      </ul>
+
+      <h3>4. How we use data</h3>
+      <ul>
+        <li>Run your bot and keep it connected, including restarting it after a redeploy</li>
+        <li>Show panels, check permissions and run commands</li>
+        <li>Run the moderation, AutoMod and server tools that a server's staff turn on, and keep the records those tools need</li>
+        <li>Send timed actions (temporary-ban expiry, reminders, announcements)</li>
+        <li>Send you status updates and moderation notices</li>
+        <li>Keep one bot per user and one registration per Minecraft server address</li>
+        <li>Remove unused registrations</li>
+        <li>Troubleshoot problems, review reports and prevent abuse</li>
+        <li>Answer support requests</li>
+      </ul>
+
+      <h3>5. Where your data appears</h3>
+      <ul>
+        <li><strong>Log channels.</strong> If your Discord server has one, IdleCraft posts status messages there: your mention, your bot's name, a partly hidden server address, and events such as connected, kicked or reconnecting, including the kick reason sent by the Minecraft server. If the server uses moderation, AutoMod or logging features, those records (who was warned, timed out or banned and why, AutoMod actions, joins, leaves, and edited or deleted messages if enabled) are posted there too. Anyone who can read that channel can see them.</li>
+        <li><strong>Direct messages.</strong> IdleCraft messages you when your bot joins, stops or gives up, and when a moderator or AutoMod warns, times out, kicks or bans you (if your DMs are open). Some commands that show private information, such as your account details, reply by direct message when used as a typed message instead of a slash command. If a DM can't be delivered, we do not retry it.</li>
+        <li><strong>Public join announcement.</strong> When your bot joins a Minecraft server, IdleCraft posts the full server address and port, your Discord mention and your bot's name in an announcement channel in the official IdleCraft Discord server. This happens even if you registered through a different Discord server. Repeat joins to the same address are announced at most once every 10 minutes. If you do not want a server address shared, do not register it.</li>
+        <li><strong>Bot head image.</strong> Status messages show a Minecraft head image loaded from mc-heads.net, using your bot's username in the image address.</li>
+      </ul>
+
+      <h3>6. Third parties</h3>
+      <ul>
+        <li><strong>Discord</strong> carries all bot messages and interactions.</li>
+        <li><strong>MongoDB Atlas</strong> hosts our database, which is encrypted at rest and in transit.</li>
+        <li><strong>HidenCloud</strong> hosts the bot.</li>
+        <li><strong>The Minecraft server you register</strong> receives your bot's username, its generated password (through the in-game <code>/register</code> and <code>/login</code> commands), and everything the bot does and says in game. That server's owner can see and log it, and their own policies apply.</li>
+        <li><strong>mc-heads.net</strong> serves the bot head image in status messages.</li>
+        <li><strong>A translation service</strong>, only if the operator has connected one, receives the text you ask to translate.</li>
+      </ul>
+      <p>We do not sell your data, show ads or use analytics trackers.</p>
+
+      <h3>7. Who can access your data</h3>
+      <ul>
+        <li>Your registration belongs to the Discord server you registered in. Other servers' panels and administrators cannot view or control it.</li>
+        <li>Administrators of the server you registered in can see when your bot connects and disconnects (event names only, not your server address or the reasons), and can stop your bot if you have given them access or they are authorized by that server's settings.</li>
+        <li>Each server's moderators and administrators can see that server's moderation records, audit log, settings and AutoMod records. They cannot see another server's.</li>
+        <li>The IdleCraft owner and staff of the official server can see who has an active bot, can stop or remove registrations, can view reports, and can block servers or users, for support and abuse prevention. The owner can also make a protected backup of the database on the hosting machine for recovery; backups contain the data listed in section 2 and are never sent through Discord.</li>
+        <li>We share data with the providers above to run IdleCraft, and with authorities when the law requires it.</li>
+      </ul>
+
+      <h3>8. Retention and deletion</h3>
+      <ul>
+        <li><strong>Delete button.</strong> Pressing <strong>Delete</strong> on the panel removes your registration and stops your bot straight away.</li>
+        <li><strong>Automatic cleanup.</strong> A registration that has not been started for 7 days, and whose bot is not connected, is deleted automatically.</li>
+        <li><strong>Staff removal.</strong> Staff of the official server can remove a registration with <code>/unregister</code>.</li>
+        <li><strong>Connection history</strong> is deleted automatically after 30 days.</li>
+        <li><strong>Audit log</strong> entries are deleted automatically after 180 days.</li>
+        <li><strong>Reports</strong> are deleted automatically after 90 days.</li>
+        <li><strong>Reminders and scheduled announcements</strong> are removed 7 days after they have been delivered or cancelled.</li>
+        <li><strong>Moderation cases</strong> are kept so servers keep an accurate history. Servers can archive cases, which hides them from normal views but keeps them, and you can ask us to delete yours.</li>
+        <li><strong>Server settings.</strong> Panel, role, log channel, AutoMod and other server settings are kept until an administrator changes them or asks us to delete them.</li>
+        <li><strong>Block records</strong> are kept as a moderation history.</li>
+        <li><strong>Backups</strong> made by the owner keep only the most recent copies on the hosting machine; older ones are deleted automatically.</li>
+        <li><strong>Logs.</strong> Hosting logs are kept for as long as our hosting provider retains them.</li>
+      </ul>
+      <p>To ask for access to or deletion of your data, contact us in the support server: <strong><a href="https://discord.gg/MfwFebzdpc" target="_blank" rel="noopener">https://discord.gg/MfwFebzdpc</a></strong>. We may need to verify who you are, and we may keep records we are legally required to keep or need to prevent abuse. Content that has been copied into a server's own log channel is controlled by that server's staff and Discord, and you should ask them to remove it.</p>
+
+      <h3>9. Security</h3>
+      <p>IdleCraft keeps its tokens and database credentials in environment variables, generates passwords with a secure random generator, checks permissions every time a command is used, keeps each Discord server's data separate from the others, and never shows bot passwords in Discord. No online service is completely secure, and we cannot control how a Minecraft server handles the data your bot sends it.</p>
+
+      <h3>10. Children</h3>
+      <p>IdleCraft is not for anyone under 13, or under the minimum age Discord allows in your country. If you think a child has used it, tell us in the support server and we will remove their data.</p>
+
+      <h3>11. International processing</h3>
+      <p>Our providers may process data in countries other than yours.</p>
+
+      <h3>12. Changes</h3>
+      <p>We may update this policy as IdleCraft changes. The new version will be posted on this page with a new "Last updated" date, and we will announce major changes in the support server.</p>
+
+      <h3>13. Contact</h3>
+      <p>Questions or requests: the support server at <strong><a href="https://discord.gg/MfwFebzdpc" target="_blank" rel="noopener">https://discord.gg/MfwFebzdpc</a></strong>.</p>
+    </div>
+  </div>
+
+  <div class="footer">community-manager-portfolio · session active</div>
+</div>
+</body>
+</html>
