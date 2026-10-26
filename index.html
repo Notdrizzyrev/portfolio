@@ -7,222 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --ink:#0a0c0f;
-    --panel:#111418;
-    --paper:#e7e4dc;
-    --muted:#7d8790;
-    --steel:#2a3138;
-    --signal:#5eead4;
-    --alert:#fb7185;
-  }
-  *{margin:0;padding:0;box-sizing:border-box;}
-  body{
-    background:var(--ink);
-    color:var(--paper);
-    font-family:'Inter',system-ui,sans-serif;
-    line-height:1.5;
-    padding:32px 16px 80px;
-  }
-  .wrap{max-width:760px;margin:0 auto;}
-
-  /* terminal window chrome */
-  .term{
-    background:var(--panel);
-    border:1px solid var(--steel);
-    border-radius:8px;
-    overflow:hidden;
-    margin-bottom:28px;
-  }
-  .term-bar{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    padding:10px 14px;
-    background:#0d1013;
-    border-bottom:1px solid var(--steel);
-  }
-  .dot{width:10px;height:10px;border-radius:50%;}
-  .dot.r{background:#4a4d55;}
-  .dot.y{background:#4a4d55;}
-  .dot.g{background:#4a4d55;}
-  .term-title{
-    margin-left:8px;
-    font-family:'JetBrains Mono',monospace;
-    font-size:12px;
-    color:var(--muted);
-    letter-spacing:.02em;
-  }
-  .term-body{padding:24px 20px;}
-
-  .prompt{
-    font-family:'JetBrains Mono',monospace;
-    font-size:13px;
-    color:var(--signal);
-  }
-  .prompt::before{content:"$ ";color:var(--muted);}
-
-  h1{
-    font-family:'JetBrains Mono',monospace;
-    font-weight:800;
-    font-size:clamp(32px,7vw,44px);
-    letter-spacing:-0.02em;
-    margin:14px 0 4px;
-  }
-  h1 .cursor{
-    display:inline-block;
-    width:.5em;
-    background:var(--signal);
-    margin-left:4px;
-    animation:blink 1.1s steps(1) infinite;
-  }
-  @media (prefers-reduced-motion: reduce){ h1 .cursor{animation:none;} }
-  @keyframes blink{50%{opacity:0;}}
-
-  .role{
-    font-family:'JetBrains Mono',monospace;
-    color:var(--muted);
-    font-size:13px;
-    margin-bottom:14px;
-  }
-  .desc{color:var(--paper);opacity:.85;font-size:15px;max-width:52ch;}
-
-  .section-head{
-    font-family:'JetBrains Mono',monospace;
-    font-size:12px;
-    color:var(--muted);
-    text-transform:uppercase;
-    letter-spacing:.08em;
-    margin:0 0 14px;
-    padding-bottom:10px;
-    border-bottom:1px solid var(--steel);
-  }
-  .section-head .prompt{font-size:12px;}
-
-  /* server status table */
-  .table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:13px;}
-  .table tr{border-bottom:1px solid var(--steel);}
-  .table tr:last-child{border-bottom:none;}
-  .table td{padding:11px 4px;vertical-align:middle;}
-  .table td.name{color:var(--paper);font-weight:500;}
-  .table td.count{color:var(--signal);text-align:right;}
-  .table td.unit{color:var(--muted);font-size:11px;padding-left:4px;text-align:left;}
-  .status{
-    display:inline-flex;align-items:center;gap:6px;
-    color:var(--muted);font-size:11px;
-  }
-  .status .led{
-    width:6px;height:6px;border-radius:50%;
-    background:var(--signal);
-    box-shadow:0 0 6px var(--signal);
-  }
-
-  /* services list */
-  .svc-list{display:flex;flex-direction:column;}
-  .svc{
-    display:flex;
-    align-items:flex-start;
-    gap:14px;
-    padding:14px 0;
-    border-bottom:1px solid var(--steel);
-  }
-  .svc:last-child{border-bottom:none;}
-  .svc svg{flex-shrink:0;margin-top:2px;color:var(--signal);}
-  .svc-name{font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:500;color:var(--paper);}
-  .svc-detail{font-size:13px;color:var(--muted);margin-top:2px;}
-
-  /* pricing / invoice block */
-  .invoice{font-family:'JetBrains Mono',monospace;font-size:13px;}
-  .invoice .line{
-    display:flex;justify-content:space-between;
-    padding:8px 0;border-bottom:1px dashed var(--steel);color:var(--muted);
-  }
-  .invoice .line span:last-child{color:var(--paper);}
-  .invoice .total{
-    display:flex;justify-content:space-between;align-items:baseline;
-    padding:18px 0 4px;
-  }
-  .invoice .total .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;}
-  .invoice .total .amount{font-size:36px;font-weight:800;color:var(--paper);}
-  .invoice .amount .per{font-size:14px;color:var(--muted);font-weight:400;}
-  .terms{margin-top:16px;font-size:12px;color:var(--muted);}
-  .terms b{color:var(--signal);font-weight:600;}
-
-  .footer{
-    text-align:center;
-    margin-top:36px;
-    font-family:'JetBrains Mono',monospace;
-    font-size:11px;
-    color:var(--muted);
-  }
-
-  /* wordmark */
-  .brand{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    margin-bottom:20px;
-  }
-  .brand-mark{
-    width:32px;height:32px;
-    border-radius:7px;
-    background:var(--panel);
-    border:1px solid var(--steel);
-    display:flex;align-items:center;justify-content:center;
-    font-family:'JetBrains Mono',monospace;
-    font-weight:700;
-    font-size:14px;
-    color:var(--signal);
-    flex-shrink:0;
-  }
-  .brand-word{
-    font-family:'JetBrains Mono',monospace;
-    font-weight:700;
-    font-size:14px;
-    letter-spacing:.02em;
-    color:var(--paper);
-  }
-
-  /* case study */
-  .case{
-    padding:16px 0;
-    border-bottom:1px solid var(--steel);
-  }
-  .case:last-child{border-bottom:none;}
-  .case-head{
-    display:flex;
-    justify-content:space-between;
-    align-items:baseline;
-    margin-bottom:6px;
-  }
-  .case-name{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:14px;color:var(--paper);}
-  .case-scale{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--signal);}
-  .case-detail{font-size:13px;color:var(--muted);line-height:1.55;}
-  .case-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
-  .case-tag{
-    font-family:'JetBrains Mono',monospace;
-    font-size:10.5px;
-    color:var(--muted);
-    border:1px solid var(--steel);
-    border-radius:4px;
-    padding:2px 7px;
-  }
-
-  /* IdleCraft docs */
-  .term[id]{scroll-margin-top:16px;}
-  .doc p{font-size:14px;line-height:1.6;color:var(--paper);opacity:.88;margin:0 0 10px;}
-  .doc ul{margin:0 0 12px;padding-left:18px;}
-  .doc li{font-size:14px;line-height:1.55;color:var(--paper);opacity:.88;margin-bottom:6px;}
-  .doc h3{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--signal);letter-spacing:.01em;margin:24px 0 10px;}
-  .doc .meta{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-bottom:6px;}
-  .doc .meta strong{color:var(--muted);font-weight:500;}
-  .doc strong{color:var(--paper);font-weight:600;}
-  .doc a,.linkrow a{color:var(--signal);text-decoration:none;border-bottom:1px solid var(--steel);word-break:break-word;}
-  .doc a:hover,.linkrow a:hover{border-bottom-color:var(--signal);}
-  .doc code{font-family:'JetBrains Mono',monospace;font-size:12.5px;background:#0d1013;border:1px solid var(--steel);border-radius:4px;padding:1px 5px;}
-  .linkrow{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:16px;font-family:'JetBrains Mono',monospace;font-size:12.5px;}
-</style>
+<link rel="stylesheet" href="/style.css">
+<script>var r={'#idlecraft-privacy':'/privacy-policy/','#privacy-policy':'/privacy-policy/','#idlecraft-terms':'/terms-of-service/','#terms-of-service':'/terms-of-service/'}[location.hash];if(r)location.replace(r);</script>
 </head>
 <body>
 <div class="wrap">
@@ -232,11 +18,14 @@
     <div class="brand-word">drizzyrev</div>
   </div>
 
+  <nav class="tabs" aria-label="Pages">
+    <a href="/" class="active" aria-current="page">Community Manager</a>
+    <a href="/privacy-policy/">Privacy Policy</a>
+    <a href="/terms-of-service/">Terms of Service</a>
+  </nav>
+
   <div class="term">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">drizzyrev@ops — zsh</span>
-    </div>
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">drizzyrev@ops — zsh</span></div>
     <div class="term-body">
       <div class="prompt">whoami</div>
       <h1>drizzyrev<span class="cursor">&nbsp;</span></h1>
@@ -246,10 +35,7 @@
   </div>
 
   <div class="term">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">servers --status</span>
-    </div>
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">servers --status</span></div>
     <div class="term-body">
       <table class="table">
         <tbody>
@@ -263,74 +49,57 @@
           <tr><td class="name">Last Stand Arena</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
           <tr><td class="name">Yononaka</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
           <tr><td class="name">United States Military</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
+          <tr><td class="name">RacksStudios</td><td class="count">100</td><td class="unit">members</td><td><span class="status"><span class="led"></span>active</span></td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
   <div class="term">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">services --list</span>
-    </div>
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">services --list</span></div>
     <div class="term-body">
       <div class="svc-list">
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <div><div class="svc-name">Role &amp; permission setup</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7l3-4h12l3 4M3 7v13a1 1 0 001 1h16a1 1 0 001-1V7M3 7h18M9 11h6"/></svg>
           <div><div class="svc-name">Channel organization</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="7" width="16" height="12" rx="2"/><circle cx="9" cy="13" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.2" fill="currentColor" stroke="none"/><path d="M12 7V4M9 4h6"/></svg>
           <div><div class="svc-name">Bot setup &amp; config</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 5H4v5c0 1 .5 1.7 1 2l6 6 5-5-6-6c-.3-.5-1-1-1-2z"/><circle cx="7" cy="7" r="1" fill="currentColor" stroke="none"/></svg>
           <div><div class="svc-name">Ticket systems</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l8 3v6c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V6l8-3z"/></svg>
           <div><div class="svc-name">Anti-raid protection</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>
           <div><div class="svc-name">Server security</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
           <div><div class="svc-name">Automod &amp; logging</div></div>
         </div>
-
         <div class="svc">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           <div><div class="svc-name">Ongoing improvements</div></div>
         </div>
-
       </div>
     </div>
   </div>
 
   <div class="term">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">generate-quote --monthly</span>
-    </div>
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">generate-quote --monthly</span></div>
     <div class="term-body">
       <div class="invoice">
-        <div class="total">
-          <span class="label">Monthly rate</span>
-          <span class="amount">$50<span class="per"> / mo</span></span>
-        </div>
+        <div class="total"><span class="label">Monthly rate</span><span class="amount">$50<span class="per"> / mo</span></span></div>
         <div class="line"><span>nitro</span><span>gift 5x required</span></div>
         <div class="line"><span>payment methods</span><span>Cash App · PayPal</span></div>
         <div class="line"><span>schedule</span><span>50% upfront · 50% on completion</span></div>
@@ -338,111 +107,16 @@
     </div>
   </div>
 
-
   <div class="term" id="idlecraft">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">idlecraft --about</span>
-    </div>
+    <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-title">idlecraft --about</span></div>
     <div class="term-body">
       <div class="prompt">cat README</div>
-      <p class="desc" style="margin-top:12px;">IdleCraft is a Discord bot that runs AFK Minecraft bots from a control panel, and also gives server staff moderation, AutoMod and server tools. Server admins set up a panel with <code style="font-family:'JetBrains Mono',monospace;font-size:12.5px;">/panel setup</code>, and members register a Minecraft server and start, stop or restart their bot with buttons.</p>
+      <p class="desc" style="margin-top:12px;">IdleCraft is a Discord bot that runs AFK Minecraft bots from a control panel, and also gives server staff moderation, AutoMod and server tools. Server admins set up a panel with <code>/panel setup</code>, and members register a Minecraft server and start, stop or restart their bot with buttons.</p>
       <div class="linkrow">
-        <a href="#idlecraft-privacy">Privacy Policy</a>
-        <a href="#idlecraft-terms">Terms of Service</a>
+        <a href="/privacy-policy/">Privacy Policy</a>
+        <a href="/terms-of-service/">Terms of Service</a>
         <a href="https://discord.gg/MfwFebzdpc" target="_blank" rel="noopener">Support server</a>
       </div>
-    </div>
-  </div>
-
-  <div class="term" id="idlecraft-privacy">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">idlecraft --privacy</span>
-    </div>
-    <div class="term-body doc">
-      <div class="section-head"><span class="prompt">IdleCraft Privacy Policy</span></div>
-          <div class="meta"><strong>Last updated:</strong> October 18, 2026</div>
-          <p>IdleCraft is a Discord bot that runs AFK Minecraft bots from a control panel in Discord, and gives Discord server staff moderation, AutoMod and server tools. This policy explains what data IdleCraft handles, why, who can see it, and how to have it deleted. By using IdleCraft you agree to this policy and to the <a href="#idlecraft-terms">Terms of Service</a>.</p>
-          <h3>1. The short version</h3>
-          <ul><li>IdleCraft keeps only what it needs to run your bot and the features a server turns on: your Discord user ID, the Discord server you registered in, the Minecraft server address and port you entered, your bot's username, and a generated in-game password. Server staff features also keep moderation records (section 2).</li><li><strong>IdleCraft can read messages in servers where it is present</strong>, so that commands typed as normal messages, AutoMod, auto-responses and similar features work. It does not save the text of ordinary messages and never sells it. Section 3 explains exactly what happens to message text.</li><li>When your bot joins a Minecraft server, the full server address is posted in the official IdleCraft Discord server so other members can join (see section 5).</li><li>You can delete your registration at any time with the <strong>Delete</strong> button on the panel.</li></ul>
-          <h3>2. Data we store</h3>
-          <p>When you register a bot:</p>
-          <ul><li>Your Discord user ID</li><li>The ID of the Discord server you registered through</li><li>The Minecraft server address and port you entered</li><li>Your bot's username (the one you chose, or a default)</li><li>A random password for the bot's account on that Minecraft server. You never choose or see it, and it is not your Discord or Minecraft account password. We store it so your bot can log in.</li><li>A session ID, when the registration was made, whether your bot is set to run, and when it was last used. This lets bots resume after a restart and lets us remove unused registrations.</li><li>A short history of your bot's connection events (for example connected, kicked, reconnecting) with the short reason the Minecraft server gave. It never includes passwords or full server addresses.</li></ul>
-          <p>When a server administrator or manager configures IdleCraft for their Discord server (for example with <code>/panel setup</code>):</p>
-          <ul><li>The server ID, panel channel ID and panel message ID</li><li>Role and channel IDs for panel access, staff roles, log channels and manager roles</li><li>Settings such as command on/off switches, command aliases and role or channel restrictions, session limits, the server's default Minecraft server, and shared-access settings</li><li>AutoMod settings: which protections are on, thresholds, the server's own custom filter words, link rules, and exempt roles and channels</li><li>Text the server's staff write for the bot to send: welcome and goodbye messages, custom commands, auto-responses, automatic reactions, and scheduled announcements, plus the roles given to new members</li><li>The ID of the person who changed a setting, and timestamps</li></ul>
-          <p>When moderators use moderation tools, or AutoMod acts:</p>
-          <ul><li>A case record: case number, type (for example warning, timeout, ban), the affected member's user ID, the moderator's user ID (or AutoMod), the reason text, the time, and any expiry time</li><li>Schedules for temporary bans and similar timed actions, so they still run after a restart</li><li>"Stop Ping" records: the user IDs of people who triggered mass-mention or repeated-ping protection. These IDs may also be written to a list file kept by the bot's operator.</li><li>An audit log of administrative actions: who did what, in which server, when, and whether it worked, with a short note. It does not include message text.</li></ul>
-          <p>Other data:</p>
-          <ul><li><strong>Reports</strong> you send with <code>/report</code>: the text you write, your user ID, the server ID and the time</li><li><strong>Reminders</strong> you create: the reminder text, your user ID and the time it is due</li><li><strong>Blocks:</strong> when we block a server or a user for abuse, the ID, the reason, who added the block, and timestamps</li></ul>
-          <h3>3. Data we handle but do not store</h3>
-          <ul><li><strong>Discord interactions.</strong> Button presses, slash commands and form input are processed to carry out your request.</li><li><strong>Message text.</strong> In servers where IdleCraft is present, it can see the text of messages together with who sent them and where. It checks them to recognise commands typed as normal messages, to run AutoMod (word, link, invite, mention, spam, capital-letter and repeat checks) and to trigger auto-responses and automatic reactions the server has set up. IdleCraft does not save ordinary messages. When AutoMod acts, the record keeps the rule that triggered and a short note, not a copy of the message. Staff members with moderation permissions are exempt from AutoMod.</li><li><strong>Message logging (optional).</strong> If a server administrator turns on logging, the text of messages that are edited or deleted is copied into that server's own log channel, where Discord keeps it and the server's staff can read it. Only messages IdleCraft had already seen can be logged.</li><li><strong>Member joins and leaves.</strong> If a server has turned on welcome, goodbye, auto-role or logging features, IdleCraft uses the member's ID and username to send the message, assign the role or write the log entry.</li><li><strong>In-game chat.</strong> Your bot is a Minecraft client. It reads chat from the Minecraft server it is on, in real time, to spot login prompts and queue messages and to choose a short canned reply. IdleCraft does not save that chat or forward it to Discord.</li><li><strong>Join events in the official server.</strong> In the official IdleCraft server only, when someone joins, IdleCraft briefly mentions them in the welcome channels and deletes the message. It uses only the new member's user ID and stores nothing.</li><li><strong>Translation (optional).</strong> If the operator has connected a translation service, text you send with <code>/translate</code> is passed to that service to be translated, and nothing is stored by IdleCraft.</li><li><strong>Operational logs.</strong> Our hosting provider keeps logs with bot names, Discord IDs, status events (connected, kicked, reconnecting) and errors. We use them for troubleshooting and abuse prevention.</li></ul>
-          <h3>4. How we use data</h3>
-          <ul><li>Run your bot and keep it connected, including restarting it after a redeploy</li><li>Show panels, check permissions and run commands</li><li>Run the moderation, AutoMod and server tools that a server's staff turn on, and keep the records those tools need</li><li>Send timed actions (temporary-ban expiry, reminders, announcements)</li><li>Send you status updates and moderation notices</li><li>Keep one bot per user and one registration per Minecraft server address</li><li>Remove unused registrations</li><li>Troubleshoot problems, review reports and prevent abuse</li><li>Answer support requests</li></ul>
-          <h3>5. Where your data appears</h3>
-          <ul><li><strong>Log channels.</strong> If your Discord server has one, IdleCraft posts status messages there: your mention, your bot's name, a partly hidden server address, and events such as connected, kicked or reconnecting, including the kick reason sent by the Minecraft server. If the server uses moderation, AutoMod or logging features, those records (who was warned, timed out or banned and why, AutoMod actions, joins, leaves, and edited or deleted messages if enabled) are posted there too. Anyone who can read that channel can see them.</li><li><strong>Direct messages.</strong> IdleCraft messages you when your bot joins, stops or gives up, and when a moderator or AutoMod warns, times out, kicks or bans you (if your DMs are open). Some commands that show private information, such as your account details, reply by direct message when used as a typed message instead of a slash command. If a DM can't be delivered, we do not retry it.</li><li><strong>Public join announcement.</strong> When your bot joins a Minecraft server, IdleCraft posts the full server address and port, your Discord mention and your bot's name in an announcement channel in the official IdleCraft Discord server. This happens even if you registered through a different Discord server. Repeat joins to the same address are announced at most once every 10 minutes. If you do not want a server address shared, do not register it.</li><li><strong>Bot head image.</strong> Status messages show a Minecraft head image loaded from mc-heads.net, using your bot's username in the image address.</li></ul>
-          <h3>6. Third parties</h3>
-          <ul><li><strong>Discord</strong> carries all bot messages and interactions.</li><li><strong>MongoDB Atlas</strong> hosts our database, which is encrypted at rest and in transit.</li><li><strong>HidenCloud</strong> hosts the bot.</li><li><strong>The Minecraft server you register</strong> receives your bot's username, its generated password (through the in-game <code>/register</code> and <code>/login</code> commands), and everything the bot does and says in game. That server's owner can see and log it, and their own policies apply.</li><li><strong>mc-heads.net</strong> serves the bot head image in status messages.</li><li><strong>A translation service</strong>, only if the operator has connected one, receives the text you ask to translate.</li></ul>
-          <p>We do not sell your data, show ads or use analytics trackers.</p>
-          <h3>7. Who can access your data</h3>
-          <ul><li>Your registration belongs to the Discord server you registered in. Other servers' panels and administrators cannot view or control it.</li><li>Administrators of the server you registered in can see when your bot connects and disconnects (event names only, not your server address or the reasons), and can stop your bot if you have given them access or they are authorized by that server's settings.</li><li>Each server's moderators and administrators can see that server's moderation records, audit log, settings and AutoMod records. They cannot see another server's.</li><li>The IdleCraft owner and staff of the official server can see who has an active bot, can stop or remove registrations, can view reports, and can block servers or users, for support and abuse prevention. The owner can also make a protected backup of the database on the hosting machine for recovery; backups contain the data listed in section 2 and are never sent through Discord.</li><li>We share data with the providers above to run IdleCraft, and with authorities when the law requires it.</li></ul>
-          <h3>8. Retention and deletion</h3>
-          <ul><li><strong>Delete button.</strong> Pressing <strong>Delete</strong> on the panel removes your registration and stops your bot straight away.</li><li><strong>Automatic cleanup.</strong> A registration that has not been started for 7 days, and whose bot is not connected, is deleted automatically.</li><li><strong>Staff removal.</strong> Staff of the official server can remove a registration with <code>/unregister</code>.</li><li><strong>Connection history</strong> is deleted automatically after 30 days.</li><li><strong>Audit log</strong> entries are deleted automatically after 180 days.</li><li><strong>Reports</strong> are deleted automatically after 90 days.</li><li><strong>Reminders and scheduled announcements</strong> are removed 7 days after they have been delivered or cancelled.</li><li><strong>Moderation cases</strong> are kept so servers keep an accurate history. Servers can archive cases, which hides them from normal views but keeps them, and you can ask us to delete yours.</li><li><strong>Server settings.</strong> Panel, role, log channel, AutoMod and other server settings are kept until an administrator changes them or asks us to delete them.</li><li><strong>Block records</strong> are kept as a moderation history.</li><li><strong>Backups</strong> made by the owner keep only the most recent copies on the hosting machine; older ones are deleted automatically.</li><li><strong>Logs.</strong> Hosting logs are kept for as long as our hosting provider retains them.</li></ul>
-          <p>To ask for access to or deletion of your data, contact us in the support server: <strong><a href="https://discord.gg/MfwFebzdpc" target="_blank" rel="noopener">https://discord.gg/MfwFebzdpc</a></strong>. We may need to verify who you are, and we may keep records we are legally required to keep or need to prevent abuse. Content that has been copied into a server's own log channel is controlled by that server's staff and Discord, and you should ask them to remove it.</p>
-          <h3>9. Security</h3>
-          <p>IdleCraft keeps its tokens and database credentials in environment variables, generates passwords with a secure random generator, checks permissions every time a command is used, keeps each Discord server's data separate from the others, and never shows bot passwords in Discord. No online service is completely secure, and we cannot control how a Minecraft server handles the data your bot sends it.</p>
-          <h3>10. Children</h3>
-          <p>IdleCraft is not for anyone under 13, or under the minimum age Discord allows in your country. If you think a child has used it, tell us in the support server and we will remove their data.</p>
-          <h3>11. International processing</h3>
-          <p>Our providers may process data in countries other than yours.</p>
-          <h3>12. Changes</h3>
-          <p>We may update this policy as IdleCraft changes. The new version will be posted on this page with a new "Last updated" date, and we will announce major changes in the support server.</p>
-          <h3>13. Contact</h3>
-          <p>Questions or requests: the support server at <strong><a href="https://discord.gg/MfwFebzdpc" target="_blank" rel="noopener">https://discord.gg/MfwFebzdpc</a></strong>.</p>
-    </div>
-  </div>
-
-  <div class="term" id="idlecraft-terms">
-    <div class="term-bar">
-      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-      <span class="term-title">idlecraft --terms</span>
-    </div>
-    <div class="term-body doc">
-      <div class="section-head"><span class="prompt">IdleCraft Terms of Service</span></div>
-          <div class="meta"><strong>Last updated:</strong> October 18, 2026</div>
-          <h3>1. Acceptance</h3>
-          <p>By using IdleCraft, you agree to these Terms of Service ("Terms") and to the <a href="#idlecraft-privacy">Privacy Policy</a>. If you do not agree, do not use IdleCraft.</p>
-          <h3>2. About IdleCraft</h3>
-          <p>IdleCraft is a Discord bot that runs an AFK Minecraft bot for you. You register a Minecraft server from a control panel in Discord, and your bot joins it, stays connected, moves around, mines and fights mobs, eats, chats, and reconnects when it is disconnected.</p>
-          <p>IdleCraft also gives Discord server staff tools to run their community: moderation commands, AutoMod, custom commands and auto-responses, welcome and goodbye messages, logging, scheduled announcements, and general utilities.</p>
-          <p>IdleCraft is an independent project. It is <strong>not affiliated with, endorsed by, or sponsored by</strong> Discord, Mojang, or Microsoft. It is not open source, and its code is not publicly available.</p>
-          <h3>3. Who can use it</h3>
-          <p>You must be old enough to use Discord in your country (at least 13), and you must follow Discord's Terms of Service and Community Guidelines.</p>
-          <h3>4. Your responsibilities</h3>
-          <ul><li>You are responsible for everything your bot does on the Minecraft servers you register.</li><li>You must have permission from the owner or administrators of a Minecraft server before registering it. Many servers ban AFK bots or automation, so check their rules first.</li><li>You are responsible for following the rules of every Discord server and Minecraft server you use IdleCraft on.</li><li>Discord server administrators are responsible for configuring their panel, roles, commands, AutoMod and log channels, for choosing who gets moderation and manager access, and for telling their members that IdleCraft posts status and moderation messages in the log channel and can process message text as described in the Privacy Policy.</li><li>Server staff are responsible for the text they set up for the bot to send (custom commands, auto-responses, announcements, welcome and goodbye messages) and for how they use moderation tools.</li></ul>
-          <h3>5. Acceptable use</h3>
-          <p>You may not:</p>
-          <ul><li>Use IdleCraft to harass, grief, spam, attack or disrupt any person or server</li><li>Register a Minecraft server you do not have permission to use</li><li>Try to avoid a ban or kick on a server that has removed your bot</li><li>Access, control or interfere with another user's registration or data, or another server's settings and records</li><li>Bypass permissions, limits or blocks, or impersonate other users or staff</li><li>Use moderation, announcement, embed or custom-command tools to harass people, mislead them, impersonate others, or mass-ping</li><li>Try to get around AutoMod or a moderator's action using IdleCraft</li><li>Exploit bugs, overload the service, or try to break it</li><li>Use IdleCraft in any way that breaks the law or Discord's rules</li></ul>
-          <h3>6. Status messages and announcements</h3>
-          <p>When you register and run a bot, IdleCraft posts status messages in your Discord server's log channel, sends you direct messages, and announces your bot's joins publicly in the official IdleCraft server, including the full Minecraft server address. By registering a server you agree to this. The <a href="#idlecraft-privacy">Privacy Policy</a> explains what is shown and where. Do not register a server whose address you do not want shared.</p>
-          <h3>7. Risks of running a bot</h3>
-          <p>Your bot plays on a Minecraft server unattended. It can be kicked, muted or banned, and it can die, lose items or be disconnected. IdleCraft is not responsible for bans, lost items, damage, or any loss in your account or on a server.</p>
-          <h3>8. Moderation tools and AutoMod</h3>
-          <ul><li>Moderation tools only do what a server's staff ask them to, or what a server's AutoMod settings tell them to. IdleCraft does not decide who should be punished.</li><li>AutoMod works automatically and can make mistakes: it can remove harmless messages or miss harmful ones. Server staff are responsible for reviewing its settings and for any action it takes in their server.</li><li>Actions such as timeouts, kicks, bans and role changes depend on the permissions and role order the server has given IdleCraft. If Discord refuses an action, IdleCraft tells the staff member instead of pretending it worked, and it does not guarantee that a notice (direct message) reaches the person affected.</li><li>Moderation records are kept as described in the Privacy Policy. If you think a record about you is wrong, ask that server's staff first.</li><li>Staff who are given access to commands through roles or grants are acting on that server's behalf, not ours.</li></ul>
-          <h3>9. Limits and availability</h3>
-          <ul><li>Capacity is limited and shared across all Discord servers. A bot can only start when a slot is free, and a server may set its own lower limit.</li><li>Each user can register one bot, and a Minecraft server address can be registered by one user at a time.</li><li>A registration belongs to the Discord server it was made in, and can only be managed from there.</li><li>Registrations that have not been started for 7 days are deleted automatically.</li><li>Commands may be turned off, limited to certain channels or roles, or put on cooldown by server staff or by us.</li><li>IdleCraft is provided <strong>"as is"</strong> and <strong>"as available"</strong>. We do not guarantee uninterrupted service, successful connections to any server, correct AutoMod decisions, or that bots will stay online. Features can change, stop working, or be removed at any time.</li></ul>
-          <h3>10. Blocking and termination</h3>
-          <p>We may stop your bots, remove your registration, block you, or block a whole Discord server (and make IdleCraft leave it) at any time, for example if these Terms are broken, if there is abuse, or if there is a security risk. A blocked user cannot use IdleCraft's commands or buttons.</p>
-          <h3>11. Third-party services</h3>
-          <p>IdleCraft depends on Discord, Minecraft servers, MongoDB Atlas, HidenCloud and mc-heads.net, and, if enabled, a translation service. They have their own terms and policies. We are not responsible for their outages, errors or changes.</p>
-          <h3>12. Disclaimers and liability</h3>
-          <p>To the extent the law allows:</p>
-          <ul><li>IdleCraft comes with no warranties, express or implied.</li><li>We are not liable for indirect or consequential losses, or for losses caused by bans, kicks, moderation decisions, AutoMod mistakes, downtime or the actions of third parties.</li></ul>
-          <p>Nothing in these Terms limits liability for death, personal injury, fraud, or anything else that cannot legally be limited.</p>
-          <h3>13. Changes</h3>
-          <p>We may update these Terms. The new version will be posted on this page with a new "Last updated" date, and we will announce major changes in the support server. If you keep using IdleCraft after a change, you accept the new Terms.</p>
-          <h3>14. Contact</h3>
-          <p>Questions about these Terms: the support server at <strong><a href="https://discord.gg/MfwFebzdpc" target="_blank" rel="noopener">https://discord.gg/MfwFebzdpc</a></strong>.</p>
     </div>
   </div>
 
